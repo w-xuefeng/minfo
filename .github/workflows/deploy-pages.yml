@@ -1,0 +1,125 @@
+name: Build and publish MINFO
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: minfo-pages-publication
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out the source revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.6.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install locked dependencies without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Verify the locked dependency supply chain
+        run: pnpm run verify:dependencies
+
+      - name: Check formatting
+        run: pnpm run format:check
+
+      - name: Verify and build the application
+        run: pnpm run build
+
+      - name: Verify the public build output
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f dist/index.html
+          test -n "$(find dist -type f -print -quit)"
+
+          forbidden_file="$(find dist -type f \( -name '.env*' -o -name '*.ts' -o -name '*.vue' \) -print -quit)"
+          if [[ -n "$forbidden_file" ]]; then
+            echo "Build output contains a source or environment file: $forbidden_file" >&2
+            exit 1
+          fi
+
+      - name: Verify the copied browser media runtime
+        run: pnpm run verify:dist-runtime
+
+      - name: Publish dist to the pages branch
+        shell: bash
+        env:
+          PAGES_BRANCH: pages
+          PAGES_WORKTREE: ${{ runner.temp }}/minfo-pages-worktree
+          RELEASE_TAG: minfo-pages-build-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          cleanup() {
+            git worktree remove --force "$PAGES_WORKTREE" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          if git ls-remote --exit-code --heads origin "$PAGES_BRANCH" >/dev/null 2>&1; then
+            git fetch --no-tags origin "refs/heads/$PAGES_BRANCH:refs/remotes/origin/$PAGES_BRANCH"
+            git worktree add --detach "$PAGES_WORKTREE" "origin/$PAGES_BRANCH"
+          else
+            git worktree add --detach --no-checkout "$PAGES_WORKTREE"
+            git -C "$PAGES_WORKTREE" checkout --orphan "$PAGES_BRANCH"
+          fi
+
+          # The first publish starts with an orphan branch. Later publishes retain
+          # its commit history while replacing every generated file at its tip.
+          git -C "$PAGES_WORKTREE" rm -r --ignore-unmatch -- .
+          git -C "$PAGES_WORKTREE" clean -fdx
+          cp -a dist/. "$PAGES_WORKTREE/"
+          touch "$PAGES_WORKTREE/.nojekyll"
+
+          node -e '
+            const fs = require("node:fs");
+            const [target, sourceCommit, runId, repository, serverUrl, releaseTag] = process.argv.slice(1);
+            fs.writeFileSync(target, `${JSON.stringify({
+              schemaVersion: 1,
+              sourceCommit,
+              workflowRunId: runId,
+              workflowUrl: `${serverUrl}/${repository}/actions/runs/${runId}`,
+              pagesReleaseTag: releaseTag,
+              builtAt: new Date().toISOString(),
+            }, null, 2)}\n`);
+          ' "$PAGES_WORKTREE/.minfo-build.json" "$GITHUB_SHA" "$GITHUB_RUN_ID" "$GITHUB_REPOSITORY" "$GITHUB_SERVER_URL" "$RELEASE_TAG"
+
+          git -C "$PAGES_WORKTREE" add --all
+          if git -C "$PAGES_WORKTREE" diff --cached --quiet; then
+            echo "The published output is unchanged."
+            exit 0
+          fi
+
+          git -C "$PAGES_WORKTREE" commit \
+            -m "Publish MINFO from ${GITHUB_SHA::12}" \
+            -m "Source-commit: $GITHUB_SHA" \
+            -m "Workflow-run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          git -C "$PAGES_WORKTREE" tag -a "$RELEASE_TAG" -m "Verified MINFO Pages publication from $GITHUB_SHA"
+          git -C "$PAGES_WORKTREE" push --atomic origin \
+            "HEAD:refs/heads/$PAGES_BRANCH" \
+            "refs/tags/$RELEASE_TAG"

@@ -1,0 +1,88 @@
+name: Roll back MINFO Pages
+
+on:
+  workflow_dispatch:
+    inputs:
+      pages_commit:
+        description: Verified MINFO Pages release tag or commit SHA to make live
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: minfo-pages-publication
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository metadata
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Point pages at the verified build
+        shell: bash
+        env:
+          REQUESTED_RELEASE: ${{ inputs.pages_commit }}
+          PAGES_BRANCH: pages
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$REQUESTED_RELEASE" =~ ^([0-9a-fA-F]{7,64}|minfo-pages-build-[0-9]+-[0-9]+)$ ]]; then
+            echo "pages_commit must be a MINFO release tag or Git commit SHA." >&2
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --force --tags origin
+          if ! git ls-remote --exit-code --heads origin "$PAGES_BRANCH" >/dev/null 2>&1; then
+            echo "The pages branch does not exist yet." >&2
+            exit 1
+          fi
+          git fetch --no-tags origin "refs/heads/$PAGES_BRANCH:refs/remotes/origin/$PAGES_BRANCH"
+
+          current_commit="$(git rev-parse "origin/$PAGES_BRANCH")"
+          if [[ "$REQUESTED_RELEASE" =~ ^minfo-pages-build- ]]; then
+            requested_commit="$(git rev-parse --verify "refs/tags/$REQUESTED_RELEASE^{commit}")"
+          else
+            requested_commit="$(git rev-parse --verify "$REQUESTED_RELEASE^{commit}")"
+          fi
+
+          receipt="$(git show "$requested_commit:.minfo-build.json")"
+          if ! jq -e \
+            '.schemaVersion == 1 and (.sourceCommit | type == "string") and (.workflowRunId | type == "string") and (.pagesReleaseTag | type == "string")' \
+            <<<"$receipt" \
+            >/dev/null; then
+            echo "The requested commit does not contain a valid MINFO build receipt." >&2
+            exit 1
+          fi
+
+          receipt_tag="$(jq -r '.pagesReleaseTag' <<<"$receipt")"
+          if [[ ! "$receipt_tag" =~ ^minfo-pages-build-[0-9]+-[0-9]+$ ]]; then
+            echo "The requested receipt has an invalid release tag." >&2
+            exit 1
+          fi
+
+          tag_commit="$(git rev-parse --verify "refs/tags/$receipt_tag^{commit}")"
+          if [[ "$tag_commit" != "$requested_commit" ]]; then
+            echo "The requested receipt is not anchored by its MINFO Pages release tag." >&2
+            exit 1
+          fi
+
+          if [[ "$REQUESTED_RELEASE" =~ ^minfo-pages-build- && "$REQUESTED_RELEASE" != "$receipt_tag" ]]; then
+            echo "The requested tag does not match the build receipt." >&2
+            exit 1
+          fi
+
+          backup_tag="pages-before-rollback-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git tag -a "$backup_tag" "$current_commit" -m "Pages before rollback to $requested_commit"
+          git push origin "refs/tags/$backup_tag"
+          git push origin "$requested_commit:refs/heads/$PAGES_BRANCH" \
+            --force-with-lease="refs/heads/$PAGES_BRANCH:$current_commit"

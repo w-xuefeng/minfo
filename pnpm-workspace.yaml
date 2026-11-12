@@ -1,0 +1,16 @@
+# This policy deliberately treats every package as untrusted until it is pinned
+# in pnpm-lock.yaml and has passed the CI audit stages.
+minimumReleaseAge: 1440
+minimumReleaseAgeStrict: true
+trustPolicy: no-downgrade
+blockExoticSubdeps: true
+verifyStoreIntegrity: true
+strictStorePkgContentCheck: true
+strictDepBuilds: true
+allowBuilds: {}
+saveExact: true
+overrides:
+  glob: 14.0.2
+  minimatch: 11.0.1
+audit:
+  level: low

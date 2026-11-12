@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.DS_Store
+.env.local
+.env.*.local
+# Runtime assets are copied from the pnpm-locked @ffmpeg/core package during
+# build. Generated public binaries stay ignored; manifest.json is tracked.
+public/media-runtime/*.js
+public/media-runtime/*.wasm
+public/media-runtime/*.worker.js
+logs

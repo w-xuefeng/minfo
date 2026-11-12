@@ -2,25 +2,29 @@
 
 MINFO 是 **Music Information** 的缩写合成词。它是一款部署在 GitHub Pages 上的纯前端音频元信息管理工具：用户在浏览器中选择或拖入本地音频文件，查看、编辑可写元数据，并导出原格式或转换后的新文件。
 
-本仓库当前只沉淀产品与工程决策，尚未创建应用代码。
+本仓库正在实施首版。本文档记录已确认的产品与工程契约；尚未通过端到端验证的能力必须在产品中显示为“当前不可用”，不能被当作发布承诺。
 
-| 文档 | 说明 |
-| --- | --- |
-| [01-product-scope.md](01-product-scope.md) | 用户目标、范围、术语与验收标准 |
-| [02-architecture.md](02-architecture.md) | UI/服务分层、媒体能力路由与 Worker 边界 |
-| [03-metadata-and-format-policy.md](03-metadata-and-format-policy.md) | 元数据模型、格式语义与导出兼容性规则 |
-| [04-ui-ux.md](04-ui-ux.md) | 页面信息架构、状态、无障碍与交互规范 |
-| [05-deployment-privacy.md](05-deployment-privacy.md) | GitHub Pages、隐私、性能与安全约束 |
-| [06-delivery-roadmap.md](06-delivery-roadmap.md) | 分阶段实施、测试矩阵与上线门槛 |
+当前代码已具备标签读取、预检、脚本回退、OPFS **运行时二进制**缓存及 Pages 工作流骨架。浏览器运行时由 pnpm 锁定的 `@ffmpeg/ffmpeg@0.12.15` 和 `@ffmpeg/core@0.12.10` 提供，构建时复制为同源资产并在浏览器加载前校验 SHA-256；真实 MP3/M4A/ADTS AAC 浏览器样本回归仍是持续完善项。用户媒体的临时 OPFS 工作区仍是待完成的性能项，当前不持久化用户媒体。
+
+| 文档                                                                 | 说明                                            |
+| -------------------------------------------------------------------- | ----------------------------------------------- |
+| [01-product-scope.md](01-product-scope.md)                           | 用户目标、范围、术语与验收标准                  |
+| [02-architecture.md](02-architecture.md)                             | UI/服务分层、媒体能力路由与 Worker 边界         |
+| [03-metadata-and-format-policy.md](03-metadata-and-format-policy.md) | 元数据模型、格式语义与导出兼容性规则            |
+| [04-ui-ux.md](04-ui-ux.md)                                           | 页面信息架构、状态、无障碍与交互规范            |
+| [05-deployment-privacy.md](05-deployment-privacy.md)                 | GitHub Pages、隐私、性能与安全约束              |
+| [06-delivery-roadmap.md](06-delivery-roadmap.md)                     | 分阶段实施、测试矩阵与上线门槛                  |
+| [07-media-runtime-supply-chain.md](07-media-runtime-supply-chain.md) | pnpm 依赖安全、FFmpeg WASM 版本固定与资产完整性 |
 
 ## 已确认的基线
 
-- 前端：Vite、Vue 3、TypeScript、pnpm。实际建项时采用当时稳定的最新版本并由 lockfile 固化，不在设计阶段虚构版本号。
-- 部署：`main` 保存源码和文档；每次推送 `main` 后，GitHub Actions 构建并把产物发布到孤儿 `pages` 分支根目录，GitHub Pages 从该分支提供静态站点。默认无后端、无账号、无云端文件上传。
-- 分层：UI 层只负责呈现与用户意图；服务层负责文件检查、元数据读写、能力判定、转码和下载。
-- 媒体：先使用浏览器原生能力取得文件属性、可用时长与编解码能力信息；通用的容器标签、封面、歌词读取与写入不属于 Web Native/WebCodecs 的能力，因而在 Dedicated Worker 中以 `ffprobe` WASM 探测、以 `ffmpeg` WASM 写入或转码作为兜底。
-- 运行时缓存：体积较大的 `ffmpeg` / `ffprobe` WASM 运行时首次按需加载后缓存至 OPFS；缓存由构建生成的版本化清单和 SHA-256 完整性校验控制，依赖变更时自动更新。
-- 隐私：音频内容、封面和歌词默认只在当前浏览器会话中处理，导出产物由浏览器下载。
+- 前端：Vite、Vue 3、TypeScript、pnpm，由 lockfile 固化版本。
+- 部署：`main` 保存源码和文档；每次推送 `main` 后，GitHub Actions 在完整质量门槛通过后发布产物。`pages` 仅首次创建为孤儿分支，之后保留成功构建历史，手动回滚只移动 `pages`，不改写 `main`。
+- 分层：UI 层只负责呈现与用户意图；服务层负责接入、读取、草稿、预检、转码、验收、下载与本机脚本渲染。浏览器格式目录和表单能力配置分开维护，UI 不按格式名称写死字段逻辑。队列一次只运行一个媒体任务，但可顺序处理多个文件并保留各自草稿。
+- 媒体：原生 API 只提供文件属性与尽力而为的技术信息；WebCodecs 只探测或处理编码块，不能读写通用容器标签。首发浏览器输出矩阵为 MP3、M4A 与 ADTS AAC（`.aac`）；除这三项外的格式仅保留在本机 FFmpeg 命令路径。ADTS AAC 不承载内嵌封面，因此有待保留或新增封面时浏览器会说明副本将省略哪些封面，并在用户确认后导出。
+- 运行时缓存：页面启动后在后台准备同源媒体运行时，优先复用 OPFS 中经版本化清单和 SHA-256 校验的资产。运行时来自 pnpm 精确锁定的 `@ffmpeg/core`，包装层来自精确锁定的 `@ffmpeg/ffmpeg`；pnpm 对所有锁定依赖执行完整性、Registry 签名和漏洞审计。许可证只作为可选追溯信息，不是允许/拒绝条件。当前只实现了运行时资产缓存；用户媒体临时 OPFS 工作区将在后续性能阶段补齐。
+- 隐私：无账号、无云端文件上传、无自动遥测。导出产物由浏览器下载。
+- 歌词：按语言独立管理，预设语言表可直接选择，也可创建其他语言码；同一种语言只有一个槽位。槽位集合是新副本的最终歌词清单：导出会清除已识别的源歌词标签或帧，再将第一个槽位写入普通 `lyrics` / `lyrics_language`，其他槽位写为 `lyrics-{language}`。因此删除某槽位不会留下旧歌词。LRC 只影响各槽位的折叠预览；不生成新的 `SYLT`，已识别的原生 `SYLT` 会被移除并以当前普通歌词为准。源文件不被修改。
 
 ## 关键术语
 

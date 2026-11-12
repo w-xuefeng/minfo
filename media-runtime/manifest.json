@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 3,
+  "enabled": true,
+  "runtimeVersion": "ffmpeg-wasm-0.12.15-core-0.12.10",
+  "coreVariant": "single-thread",
+  "distribution": {
+    "corePackage": "@ffmpeg/core",
+    "coreVersion": "0.12.10",
+    "wrapperPackage": "@ffmpeg/ffmpeg",
+    "wrapperVersion": "0.12.15",
+    "ffmpegVersion": "n5.1.4"
+  },
+  "license": "GPL-2.0-or-later",
+  "assets": [
+    {
+      "logicalName": "core",
+      "file": "ffmpeg-core.js",
+      "mime": "text/javascript",
+      "bytes": 111804,
+      "sha256": "67a48f11645f85439f3fde4f2119042c16b374b910206b7a7a24f342e28dcae3"
+    },
+    {
+      "logicalName": "wasm",
+      "file": "ffmpeg-core.wasm",
+      "mime": "application/wasm",
+      "bytes": 32232419,
+      "sha256": "9f57947a5bd530d8f00c5b3f2cb2a3492faa7e5d823315342d6a8656d0a6b7b7"
+    }
+  ]
+}

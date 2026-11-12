@@ -91,7 +91,10 @@ jobs:
 
           # The first publish starts with an orphan branch. Later publishes retain
           # its commit history while replacing every generated file at its tip.
-          git -C "$PAGES_WORKTREE" rm -r --ignore-unmatch -- .
+          # `checkout --orphan` retains the source tree in the new branch's
+          # index. This isolated, temporary worktree must force-remove that
+          # inherited index before it can contain only the generated site.
+          git -C "$PAGES_WORKTREE" rm -rf --ignore-unmatch -- .
           git -C "$PAGES_WORKTREE" clean -fdx
           cp -a dist/. "$PAGES_WORKTREE/"
           touch "$PAGES_WORKTREE/.nojekyll"

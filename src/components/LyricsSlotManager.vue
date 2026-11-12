@@ -1,9 +1,15 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { IconPlus, IconRotate, IconX } from '@tabler/icons-vue'
+import { computed, nextTick, ref, watch } from 'vue'
+import { IconLoader2, IconPlus, IconRotate, IconUpload, IconX } from '@tabler/icons-vue'
 
 import CreateSelect, { type CreateSelectOption } from './CreateSelect.vue'
 import LyricsPreview from './LyricsPreview.vue'
+import {
+  lyricsFileAccept,
+  lyricsFileFormatLabel,
+  parseLyricsFile,
+  type LyricsFileParseSuccess,
+} from '@/domain/lyric-file'
 import {
   duplicateLyricsLanguages,
   isLyricsLanguage,
@@ -33,6 +39,22 @@ const newLanguage = ref<string>(
 )
 const interactionError = ref('')
 
+interface PendingLyricsFileImport {
+  readonly slotId: string
+  readonly language: string
+  readonly fileName: string
+  readonly parsed: LyricsFileParseSuccess
+}
+
+const lyricsFileInput = ref<HTMLInputElement | null>(null)
+const lyricsImportDialog = ref<HTMLElement | null>(null)
+const lyricsImportTargetSlotId = ref<string | null>(null)
+const lyricsImportInProgressSlotId = ref<string | null>(null)
+const lyricsImportErrors = ref<Record<string, string>>({})
+const lyricsImportNotices = ref<Record<string, string>>({})
+const pendingLyricsFileImport = ref<PendingLyricsFileImport | null>(null)
+let lyricsImportRequest = 0
+
 const suggestedLanguageSet = new Set<string>(suggestedLyricsLanguages)
 
 const languageOptions = computed<readonly string[]>(() => [
@@ -43,6 +65,15 @@ const languageOptions = computed<readonly string[]>(() => [
 ])
 
 const textareaValue = (event: Event): string => (event.target as HTMLTextAreaElement).value
+
+const lyricsTextareaId = (slot: LyricsSlot): string => `lyrics-text-${slot.id}`
+const lyricsImportErrorId = (slot: LyricsSlot): string => `lyrics-import-error-${slot.id}`
+const lyricsImportNoticeId = (slot: LyricsSlot): string => `lyrics-import-notice-${slot.id}`
+const lyricsImportFeedbackId = (slot: LyricsSlot): string | undefined => {
+  if (lyricsImportErrors.value[slot.id]) return lyricsImportErrorId(slot)
+  if (lyricsImportNotices.value[slot.id]) return lyricsImportNoticeId(slot)
+  return undefined
+}
 
 const languageLabel = (language: string): string => {
   const label = suggestedLyricsLanguageLabel(language)
@@ -116,6 +147,99 @@ const updateSlot = (id: string, patch: Partial<LyricsSlot>): void => {
   )
 }
 
+const clearLyricsImportFeedback = (slotId: string): void => {
+  const errors = { ...lyricsImportErrors.value }
+  const notices = { ...lyricsImportNotices.value }
+  delete errors[slotId]
+  delete notices[slotId]
+  lyricsImportErrors.value = errors
+  lyricsImportNotices.value = notices
+}
+
+const setLyricsImportError = (slotId: string, message: string): void => {
+  const notices = { ...lyricsImportNotices.value }
+  delete notices[slotId]
+  lyricsImportNotices.value = notices
+  lyricsImportErrors.value = { ...lyricsImportErrors.value, [slotId]: message }
+}
+
+const setLyricsImportNotice = (slotId: string, message: string): void => {
+  const errors = { ...lyricsImportErrors.value }
+  delete errors[slotId]
+  lyricsImportErrors.value = errors
+  lyricsImportNotices.value = { ...lyricsImportNotices.value, [slotId]: message }
+}
+
+const applyLyricsFileImport = (candidate: PendingLyricsFileImport): void => {
+  const slot = props.slots.find((item) => item.id === candidate.slotId)
+  pendingLyricsFileImport.value = null
+  if (!slot || !props.editable) return
+
+  updateSlot(slot.id, {
+    text: candidate.parsed.text,
+    representation: candidate.parsed.representation,
+  })
+  setLyricsImportNotice(slot.id, candidate.parsed.notice)
+}
+
+const openLyricsFilePicker = (slot: LyricsSlot): void => {
+  if (!props.editable || lyricsImportInProgressSlotId.value) return
+  clearLyricsImportFeedback(slot.id)
+  pendingLyricsFileImport.value = null
+  lyricsImportTargetSlotId.value = slot.id
+  lyricsFileInput.value?.click()
+}
+
+const onLyricsFileSelected = async (event: Event): Promise<void> => {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  const slotId = lyricsImportTargetSlotId.value
+  input.value = ''
+  lyricsImportTargetSlotId.value = null
+  if (!file || !slotId || !props.editable) return
+
+  const request = ++lyricsImportRequest
+  lyricsImportInProgressSlotId.value = slotId
+  clearLyricsImportFeedback(slotId)
+
+  try {
+    const parsed = await parseLyricsFile(file)
+    if (request !== lyricsImportRequest || !props.editable) return
+    if (!parsed.ok) {
+      setLyricsImportError(slotId, parsed.error)
+      return
+    }
+
+    const slot = props.slots.find((item) => item.id === slotId)
+    if (!slot) return
+    const candidate: PendingLyricsFileImport = {
+      slotId,
+      language: slot.language,
+      fileName: file.name,
+      parsed,
+    }
+    if (slot.text.trim()) {
+      pendingLyricsFileImport.value = candidate
+      return
+    }
+    applyLyricsFileImport(candidate)
+  } catch {
+    if (request === lyricsImportRequest) {
+      setLyricsImportError(slotId, '读取歌词文件时发生意外错误，请重新选择该文件。')
+    }
+  } finally {
+    if (request === lyricsImportRequest) {
+      lyricsImportInProgressSlotId.value = null
+    }
+  }
+}
+
+const cancelLyricsFileImport = (): void => {
+  const candidate = pendingLyricsFileImport.value
+  pendingLyricsFileImport.value = null
+  if (candidate) setLyricsImportNotice(candidate.slotId, '已取消替换，当前歌词未变。')
+}
+
 const updateSlotLanguage = (slot: LyricsSlot, value: string): void => {
   if (!props.editable) return
   const language = normalizeLyricsLanguage(value)
@@ -168,6 +292,12 @@ const sourceDescription = (slot: LyricsSlot): string | null => {
 }
 
 const duplicateLanguages = computed(() => duplicateLyricsLanguages(props.slots))
+
+watch(pendingLyricsFileImport, async (candidate) => {
+  if (!candidate) return
+  await nextTick()
+  lyricsImportDialog.value?.focus()
+})
 </script>
 
 <template>
@@ -219,6 +349,15 @@ const duplicateLanguages = computed(() => duplicateLyricsLanguages(props.slots))
       每种歌词语言只能有一个槽位：{{ duplicateLanguages.join('、') }} 已重复。
     </p>
 
+    <input
+      ref="lyricsFileInput"
+      class="visually-hidden"
+      type="file"
+      :accept="lyricsFileAccept"
+      :disabled="!props.editable"
+      @change="onLyricsFileSelected"
+    />
+
     <div v-if="props.slots.length" class="lyrics-slot-list">
       <article v-for="(slot, index) in props.slots" :key="slot.id" class="lyrics-slot-card">
         <div class="lyrics-slot-heading">
@@ -266,22 +405,97 @@ const duplicateLanguages = computed(() => duplicateLyricsLanguages(props.slots))
             />
             <span class="field-help">已存在的其他语言不可选择，也可创建新语言码。</span>
           </div>
-          <label class="field lyrics-text-field">
-            <span class="field-label">歌词原文</span>
+          <div class="field lyrics-text-field">
+            <div class="lyrics-text-heading">
+              <label class="field-label" :for="lyricsTextareaId(slot)">歌词原文</label>
+              <button
+                type="button"
+                class="button button-secondary button-small lyrics-import-button"
+                :aria-label="`为 ${slot.language} 歌词槽位解析歌词文件`"
+                :aria-busy="lyricsImportInProgressSlotId === slot.id"
+                :disabled="!props.editable || lyricsImportInProgressSlotId !== null"
+                @click="openLyricsFilePicker(slot)"
+              >
+                <IconLoader2
+                  v-if="lyricsImportInProgressSlotId === slot.id"
+                  class="spin"
+                  :size="15"
+                  aria-hidden="true"
+                />
+                <IconUpload v-else :size="15" aria-hidden="true" />
+                {{ lyricsImportInProgressSlotId === slot.id ? '正在解析…' : '解析歌词文件' }}
+              </button>
+            </div>
             <textarea
+              :id="lyricsTextareaId(slot)"
               :value="slot.text"
               rows="8"
               spellcheck="false"
               :disabled="!props.editable"
+              :aria-describedby="lyricsImportFeedbackId(slot)"
               @input="updateSlot(slot.id, { text: textareaValue($event) })"
             />
-          </label>
+            <span class="field-help">支持 .txt、.lrc 和明文 .qrc，最大 2 MB。</span>
+            <p
+              v-if="lyricsImportErrors[slot.id]"
+              :id="lyricsImportErrorId(slot)"
+              class="field-error lyrics-import-feedback"
+              role="alert"
+            >
+              {{ lyricsImportErrors[slot.id] }}
+            </p>
+            <p
+              v-else-if="lyricsImportNotices[slot.id]"
+              :id="lyricsImportNoticeId(slot)"
+              class="field-success lyrics-import-feedback"
+              role="status"
+            >
+              {{ lyricsImportNotices[slot.id] }}
+            </p>
+          </div>
         </div>
         <LyricsPreview :lyrics-slot="slot" />
       </article>
     </div>
     <div v-else class="lyrics-empty">
       还没有歌词槽位。选择语言后添加，即可分别维护不同语言的歌词。
+    </div>
+
+    <div
+      v-if="pendingLyricsFileImport"
+      class="lyrics-import-dialog-backdrop"
+      @keydown.esc.prevent="cancelLyricsFileImport"
+    >
+      <section
+        ref="lyricsImportDialog"
+        class="lyrics-import-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="lyrics-import-dialog-title"
+        aria-describedby="lyrics-import-dialog-description"
+        tabindex="-1"
+      >
+        <p class="eyebrow">替换前确认</p>
+        <h3 id="lyrics-import-dialog-title">替换当前歌词？</h3>
+        <p id="lyrics-import-dialog-description">
+          将使用“{{ pendingLyricsFileImport.fileName }}”（{{
+            lyricsFileFormatLabel(pendingLyricsFileImport.parsed.format)
+          }}）替换 {{ pendingLyricsFileImport.language }} 槽位中的现有歌词。
+        </p>
+        <p class="field-help">{{ pendingLyricsFileImport.parsed.notice }}</p>
+        <div class="lyrics-import-dialog-actions">
+          <button type="button" class="button button-secondary" @click="cancelLyricsFileImport">
+            取消
+          </button>
+          <button
+            type="button"
+            class="button button-primary"
+            @click="applyLyricsFileImport(pendingLyricsFileImport)"
+          >
+            替换当前歌词
+          </button>
+        </div>
+      </section>
     </div>
   </section>
 </template>

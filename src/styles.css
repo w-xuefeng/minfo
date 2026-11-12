@@ -716,6 +716,10 @@ textarea[aria-invalid='true'] {
   color: var(--danger);
 }
 
+.field-success {
+  color: var(--success);
+}
+
 .number-pairs {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -820,6 +824,62 @@ textarea[aria-invalid='true'] {
 
 .lyrics-text-field textarea {
   min-height: 220px;
+}
+
+.lyrics-text-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+
+.lyrics-import-button {
+  flex: 0 0 auto;
+}
+
+.lyrics-import-feedback {
+  margin: 7px 0 0;
+}
+
+.lyrics-import-dialog-backdrop {
+  position: fixed;
+  z-index: 40;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgb(7 16 12 / 0.5);
+  padding: 20px;
+}
+
+.lyrics-import-dialog {
+  width: min(480px, 100%);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 22px;
+}
+
+.lyrics-import-dialog h3 {
+  margin-bottom: 9px;
+}
+
+.lyrics-import-dialog > p:not(.eyebrow) {
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+
+.lyrics-import-dialog .field-help {
+  color: var(--text-muted);
+}
+
+.lyrics-import-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
 }
 
 .lyrics-preview {
@@ -1695,6 +1755,11 @@ textarea[aria-invalid='true'] {
     justify-self: start;
   }
 
+  .lyrics-text-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .cover-card {
     grid-template-columns: 64px minmax(0, 1fr);
   }
@@ -1772,6 +1837,15 @@ textarea[aria-invalid='true'] {
 
   .lyrics-preview-toggle {
     text-align: left;
+  }
+
+  .lyrics-import-dialog-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .lyrics-import-dialog-actions .button {
+    width: 100%;
   }
 
   .conflict-values {

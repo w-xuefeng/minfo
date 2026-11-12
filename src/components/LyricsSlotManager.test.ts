@@ -1,4 +1,4 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 
 import LyricsSlotManager from './LyricsSlotManager.vue'
@@ -11,6 +11,21 @@ const slot = (language: string, text = ''): LyricsSlot => ({
   representation: 'plain',
   text,
 })
+
+const lyricFile = (contents: string, name: string): File =>
+  new File([contents], name, { type: 'text/plain' })
+
+const chooseLyricsFile = async (
+  wrapper: ReturnType<typeof mount>,
+  language: string,
+  file: File,
+): Promise<void> => {
+  await wrapper.get(`button[aria-label="为 ${language} 歌词槽位解析歌词文件"]`).trigger('click')
+  const input = wrapper.get('input[type="file"]')
+  Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
+  await input.trigger('change')
+  await flushPromises()
+}
 
 describe('LyricsSlotManager', () => {
   it('adds a distinct language slot through the creatable language input', async () => {
@@ -96,6 +111,9 @@ describe('LyricsSlotManager', () => {
     expect(
       readonly.get('[aria-label="删除 eng 歌词槽位"]').attributes('disabled'),
     ).toBeDefined()
+    expect(
+      readonly.get('button[aria-label="为 eng 歌词槽位解析歌词文件"]').attributes('disabled'),
+    ).toBeDefined()
   })
 
   it('edits one slot without changing another language slot', async () => {
@@ -147,5 +165,66 @@ describe('LyricsSlotManager', () => {
     expect(options).toContain('菲律宾语 (fil)')
     expect(options).not.toContain('英语 (eng)')
     expect(options).not.toContain('中文 (zho)')
+  })
+
+  it('imports a selected LRC file directly into an empty language slot', async () => {
+    const slots = [slot('eng')]
+    const wrapper = mount(LyricsSlotManager, {
+      props: { slots, originalSlots: slots, editable: true },
+    })
+
+    await chooseLyricsFile(wrapper, 'eng', lyricFile('[00:01.00]Imported lyric', 'song.lrc'))
+
+    expect(wrapper.emitted<readonly [readonly LyricsSlot[]]>('update')?.[0]?.[0]).toEqual([
+      expect.objectContaining({
+        id: 'eng',
+        text: '[00:01.00]Imported lyric',
+        representation: 'synchronised',
+      }),
+    ])
+    expect(wrapper.text()).toContain('已解析 LRC 歌词文件。')
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+  })
+
+  it('asks before replacing existing lyrics and leaves the slot unchanged when cancelled', async () => {
+    const slots = [slot('eng', 'Current lyric')]
+    const wrapper = mount(LyricsSlotManager, {
+      props: { slots, originalSlots: slots, editable: true },
+    })
+    const file = lyricFile('[00:02.00]Replacement lyric', 'replacement.lrc')
+
+    await chooseLyricsFile(wrapper, 'eng', file)
+
+    expect(wrapper.get('[role="dialog"]').text()).toContain('替换当前歌词？')
+    expect(wrapper.get('[role="dialog"]').text()).toContain('replacement.lrc')
+    expect(wrapper.emitted('update')).toBeUndefined()
+
+    await wrapper.get('.lyrics-import-dialog-actions .button-secondary').trigger('click')
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('已取消替换，当前歌词未变。')
+    expect(wrapper.emitted('update')).toBeUndefined()
+
+    await chooseLyricsFile(wrapper, 'eng', file)
+    await wrapper.get('.lyrics-import-dialog-actions .button-primary').trigger('click')
+    expect(wrapper.emitted<readonly [readonly LyricsSlot[]]>('update')?.[0]?.[0]).toEqual([
+      expect.objectContaining({
+        id: 'eng',
+        text: '[00:02.00]Replacement lyric',
+        representation: 'synchronised',
+      }),
+    ])
+  })
+
+  it('keeps current lyrics and explains why an unsupported file could not be parsed', async () => {
+    const slots = [slot('eng', 'Current lyric')]
+    const wrapper = mount(LyricsSlotManager, {
+      props: { slots, originalSlots: slots, editable: true },
+    })
+
+    await chooseLyricsFile(wrapper, 'eng', lyricFile('subtitle', 'song.srt'))
+
+    expect(wrapper.text()).toContain('仅支持 .txt、.lrc 或 .qrc 歌词文件。')
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(wrapper.emitted('update')).toBeUndefined()
   })
 })

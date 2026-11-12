@@ -308,6 +308,7 @@ export const createWorkspace = (): Workspace => {
             technical: result.technical,
             nativeTags: result.nativeTags,
             warnings: result.warnings,
+            readNotices: result.readNotices,
           }))
           if (runtime.value.state === 'ready') await applyProbe(next.id, next.file)
         } catch (error) {
@@ -317,6 +318,7 @@ export const createWorkspace = (): Workspace => {
             status: 'needs-action',
             technical: fallbackTechnicalInfo(next.file, duration),
             warnings: ['完整嵌入元信息未能读取。仍可手动编辑草稿或复制本机 FFmpeg 命令。'],
+            readNotices: [],
             error: readableInspectionError(error),
           }))
         }
@@ -343,6 +345,7 @@ export const createWorkspace = (): Workspace => {
         originalDraft: emptyDraft(),
         nativeTags: [],
         warnings: [],
+        readNotices: [],
         draftRevision: 0,
         createdAt: Date.now(),
       })

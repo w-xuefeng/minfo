@@ -399,9 +399,91 @@ const toText = (value: unknown): string => {
   }
 }
 
-const collectNativeTags = (metadata: IAudioMetadata): NativeTag[] =>
+export const xmpPrivateMetadataReadNotice =
+  '检测到 XMP 私有元数据；MINFO 暂不编辑，导出后不承诺逐字保留。'
+
+const xmpPrivateMetadataWarning = /^unknown priv owner-identifier:\s*xmp$/iu
+const maximumXmpPrivateMetadataBytes = 65_536
+
+const startsWithBytes = (bytes: Uint8Array, prefix: readonly number[]): boolean =>
+  prefix.every((byte, index) => bytes[index] === byte)
+
+const decodePrivateMetadata = (data: Uint8Array): string | null => {
+  if (data.byteLength > maximumXmpPrivateMetadataBytes) return null
+  const encoding = startsWithBytes(data, [0xff, 0xfe])
+    ? 'utf-16le'
+    : startsWithBytes(data, [0xfe, 0xff])
+      ? 'utf-16be'
+      : 'utf-8'
+  const body = encoding === 'utf-8' ? data : data.subarray(2)
+
+  try {
+    return new TextDecoder(encoding, { fatal: true }).decode(body).replace(/^\uFEFF/u, '')
+  } catch {
+    return null
+  }
+}
+
+const isWellFormedXmpDocument = (text: string): boolean => {
+  const document = new DOMParser().parseFromString(text, 'application/xml')
+  if (document.getElementsByTagName('parsererror').length > 0) return false
+  const root = document.documentElement
+  return root.localName === 'xmpmeta' && root.namespaceURI === 'adobe:ns:meta/'
+}
+
+const isVerifiedXmpPrivateMetadata = (id: string, value: unknown): boolean => {
+  if (
+    id.trim().toUpperCase() !== 'PRIV' ||
+    !isRecord(value) ||
+    typeof value.owner_identifier !== 'string' ||
+    value.owner_identifier.trim().toUpperCase() !== 'XMP' ||
+    !(value.data instanceof Uint8Array)
+  ) {
+    return false
+  }
+
+  const text = decodePrivateMetadata(value.data)
+  return Boolean(text && isWellFormedXmpDocument(text))
+}
+
+export const isOpaquePrivateNativeTag = (tag: NativeTag): boolean =>
+  tag.handling === 'opaque-private'
+
+export interface ClassifiedMetadataQualityMessages {
+  readonly warnings: readonly string[]
+  readonly readNotices: readonly string[]
+}
+
+/**
+ * Reclassifies stable, recognized parser diagnostics without suppressing
+ * genuinely unknown metadata or malformed-file warnings.
+ */
+export const classifyMetadataQualityMessages = (
+  messages: readonly string[],
+  hasVerifiedXmpPrivateMetadata = false,
+): ClassifiedMetadataQualityMessages => {
+  const warnings: string[] = []
+  for (const message of messages) {
+    if (hasVerifiedXmpPrivateMetadata && xmpPrivateMetadataWarning.test(message.trim()))
+      continue
+    warnings.push(message)
+  }
+  return {
+    warnings,
+    readNotices: hasVerifiedXmpPrivateMetadata ? [xmpPrivateMetadataReadNotice] : [],
+  }
+}
+
+export const collectNativeTags = (metadata: IAudioMetadata): NativeTag[] =>
   Object.entries(metadata.native).flatMap(([type, tags]) =>
-    tags.map((tag) => ({ type, id: tag.id, value: toText(tag.value) })),
+    tags.map((tag) => ({
+      type,
+      id: tag.id,
+      value: toText(tag.value),
+      ...(isVerifiedXmpPrivateMetadata(tag.id, tag.value)
+        ? { handling: 'opaque-private' as const }
+        : {}),
+    })),
   )
 
 export const editableTextTags = (nativeTags: readonly NativeTag[]): EditableTag[] =>
@@ -414,6 +496,7 @@ export const editableTextTags = (nativeTags: readonly NativeTag[]): EditableTag[
     // value.
     .filter(
       (tag) =>
+        !isOpaquePrivateNativeTag(tag) &&
         !isManagedLyricsNativeTag(tag.id) &&
         tag.value &&
         !tag.value.startsWith('[') &&
@@ -456,6 +539,11 @@ export const inspectAudioFile = async (file: File): Promise<InspectionResult> =>
   const metadata = await parseBlob(file, { duration: true })
   const { common } = metadata
   const nativeTags = collectNativeTags(metadata)
+  const hasVerifiedXmpPrivateMetadata = nativeTags.some(isOpaquePrivateNativeTag)
+  const qualityMessages = classifyMetadataQualityMessages(
+    metadata.quality.warnings.map((warning) => warning.message),
+    hasVerifiedXmpPrivateMetadata,
+  )
   const lyricSlots = parseLyricsSlots(common.lyrics, metadata.native)
   const mainComment = common.comment?.[0]
 
@@ -480,10 +568,8 @@ export const inspectAudioFile = async (file: File): Promise<InspectionResult> =>
     },
     technical: toTechnicalInfo(file, metadata),
     nativeTags,
-    warnings: [
-      ...metadata.quality.warnings.map((warning) => warning.message),
-      ...lyricSlots.warnings,
-    ],
+    warnings: [...qualityMessages.warnings, ...lyricSlots.warnings],
+    readNotices: qualityMessages.readNotices,
   }
 }
 

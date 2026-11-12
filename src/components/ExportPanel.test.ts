@@ -34,6 +34,7 @@ const item: QueueItem = {
   },
   nativeTags: [],
   warnings: [],
+  readNotices: [],
   draftRevision: 1,
   createdAt: 1,
 }

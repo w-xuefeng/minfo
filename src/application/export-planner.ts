@@ -12,6 +12,7 @@ import {
   standardFieldRawTagSafetyIssue,
 } from './metadata-diff'
 import {
+  isOpaquePrivateNativeTag,
   isManagedLyricsNativeTag,
   isSynchronisedLyricsNativeTag,
 } from './audio-metadata-reader'
@@ -95,6 +96,9 @@ export const buildExportPlan = (
   const risks: ExportRisk[] = []
   const hasSynchronisedLyrics = item.nativeTags.some((tag) =>
     isSynchronisedLyricsNativeTag(tag.id),
+  )
+  const hasUnverifiedNativeMetadata = item.nativeTags.some(
+    (tag) => !isOpaquePrivateNativeTag(tag),
   )
   const replacesImportedLyrics =
     item.originalDraft.lyricsSlots.length > 0 ||
@@ -287,7 +291,7 @@ export const buildExportPlan = (
     )
   }
 
-  if (requiresTranscode && item.nativeTags.length > 0) {
+  if (requiresTranscode && hasUnverifiedNativeMetadata) {
     risks.push(
       risk(
         'unknown-tag-mapping',

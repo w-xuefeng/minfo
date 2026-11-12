@@ -96,6 +96,8 @@ export interface NativeTag {
   readonly type: string
   readonly id: string
   readonly value: string
+  /** A recognized private payload MINFO deliberately does not edit or verify. */
+  readonly handling?: 'opaque-private'
 }
 
 export interface InspectionResult {
@@ -103,6 +105,8 @@ export interface InspectionResult {
   readonly technical: TechnicalInfo
   readonly nativeTags: readonly NativeTag[]
   readonly warnings: readonly string[]
+  /** Non-blocking facts discovered while reading the source file. */
+  readonly readNotices: readonly string[]
 }
 
 export interface ExportRequest {
@@ -167,6 +171,7 @@ export interface QueueItem {
   readonly technical?: TechnicalInfo
   readonly nativeTags: readonly NativeTag[]
   readonly warnings: readonly string[]
+  readonly readNotices: readonly string[]
   /** A probe condition that may reduce what a browser-exported copy can retain or verify. */
   readonly browserExportWarning?: string
   /** Present only while the latest FFprobe check could not be verified. */

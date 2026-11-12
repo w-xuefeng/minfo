@@ -29,6 +29,7 @@ const item = (overrides: Partial<QueueItem> = {}): QueueItem => {
     },
     nativeTags: [],
     warnings: [],
+    readNotices: [],
     draftRevision: 4,
     createdAt: 1,
     ...overrides,
@@ -405,5 +406,30 @@ describe('buildExportPlan', () => {
     expect(plan.risks.find((risk) => risk.id === 'raw-tag-duplicate-slot')).toMatchObject({
       requiresConfirmation: true,
     })
+  })
+
+  it('does not turn structurally verified opaque XMP metadata into an unknown-tag confirmation', () => {
+    const plan = buildExportPlan(
+      item({
+        nativeTags: [
+          {
+            type: 'ID3v2.4',
+            id: 'PRIV',
+            value: '{"owner_identifier":"XMP"}',
+            handling: 'opaque-private',
+          },
+        ],
+      }),
+      {
+        format: 'mp3',
+        quality: 'high',
+        outputBaseName: 'output',
+        allowOverwrite: false,
+      },
+      runtime,
+    )
+
+    expect(plan.requiresTranscode).toBe(true)
+    expect(plan.risks.find((risk) => risk.id === 'unknown-tag-mapping')).toBeUndefined()
   })
 })

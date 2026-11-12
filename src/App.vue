@@ -254,6 +254,13 @@ onBeforeUnmount(() => {
             <ul v-if="selected.warnings.length" class="warning-list" aria-label="读取警告">
               <li v-for="warning in selected.warnings" :key="warning">{{ warning }}</li>
             </ul>
+            <ul
+              v-if="selected.readNotices.length"
+              class="information-list"
+              aria-label="读取信息"
+            >
+              <li v-for="notice in selected.readNotices" :key="notice">{{ notice }}</li>
+            </ul>
 
             <div class="overview-grid">
               <TechnicalSummary :item="selected" />

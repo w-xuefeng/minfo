@@ -336,6 +336,7 @@ h3 {
 
 .queue-list,
 .warning-list,
+.information-list,
 .cover-list,
 .lyrics-timeline {
   margin: 0;
@@ -1221,6 +1222,21 @@ textarea[aria-invalid='true'] {
   padding: 8px 10px;
   color: var(--text);
   font-size: 0.8rem;
+}
+
+.information-list {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.information-list li {
+  border-left: 3px solid var(--accent);
+  background: var(--surface-muted);
+  padding: 8px 10px;
+  color: var(--text);
+  font-size: 0.8rem;
+  line-height: 1.45;
 }
 
 .conflict-panel {

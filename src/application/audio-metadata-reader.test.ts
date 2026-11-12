@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest'
 import type { IAudioMetadata, ILyricsTag } from 'music-metadata'
 
 import {
+  classifyMetadataQualityMessages,
+  collectNativeTags,
   editableTextTags,
+  isOpaquePrivateNativeTag,
   managedLyricsNativeTagKeys,
   parseLyricsSlots,
   isSynchronisedLyricsNativeTag,
+  xmpPrivateMetadataReadNotice,
 } from './audio-metadata-reader'
 
 const lyrics = (value: unknown): readonly ILyricsTag[] => value as readonly ILyricsTag[]
@@ -21,6 +25,66 @@ const nativeTags = (
   }
   return grouped
 }
+
+describe('metadata inspection messages', () => {
+  it('turns a verified XMP PRIV diagnostic into one non-blocking read notice', () => {
+    expect(
+      classifyMetadataQualityMessages(
+        ['Unknown PRIV owner-identifier: XMP', 'An unrelated parser warning'],
+        true,
+      ),
+    ).toEqual({
+      warnings: ['An unrelated parser warning'],
+      readNotices: [xmpPrivateMetadataReadNotice],
+    })
+  })
+
+  it('keeps an owner-only XMP diagnostic as a warning until its payload is verified', () => {
+    expect(classifyMetadataQualityMessages(['Unknown PRIV owner-identifier: XMP'])).toEqual({
+      warnings: ['Unknown PRIV owner-identifier: XMP'],
+      readNotices: [],
+    })
+  })
+
+  it('marks a structurally verified XMP PRIV as opaque and keeps it out of the text-tag editor', () => {
+    const tags = collectNativeTags({
+      native: nativeTags([
+        {
+          type: 'ID3v2.4',
+          id: 'PRIV',
+          value: {
+            owner_identifier: 'XMP',
+            data: new TextEncoder().encode(
+              '<?xpacket begin="\uFEFF"?><x:xmpmeta xmlns:x="adobe:ns:meta/"></x:xmpmeta>',
+            ),
+          },
+        },
+      ]),
+    } as IAudioMetadata)
+
+    expect(isOpaquePrivateNativeTag(tags[0]!)).toBe(true)
+    expect(editableTextTags(tags)).toEqual([])
+  })
+
+  it('does not trust an owner or Adobe-branded tool string without XMP structure', () => {
+    const tags = collectNativeTags({
+      native: nativeTags([
+        {
+          type: 'ID3v2.4',
+          id: 'PRIV',
+          value: {
+            owner_identifier: 'XMP',
+            data: new TextEncoder().encode(
+              '<payload xmlns:x="adobe:ns:meta/" xmlns:xmp="http://ns.adobe.com/xap/"><x:xmpmeta x:xmptk="Adobe XMP Core"><xmp:CreatorTool>Adobe Audition</xmp:CreatorTool></x:xmpmeta></payload>',
+            ),
+          },
+        },
+      ]),
+    } as IAudioMetadata)
+
+    expect(isOpaquePrivateNativeTag(tags[0]!)).toBe(false)
+  })
+})
 
 describe('parseLyricsSlots', () => {
   it('merges repeated source languages into one independently editable language slot', () => {

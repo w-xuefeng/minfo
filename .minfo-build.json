@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "sourceCommit": "99c080b5a3b7ad229455560fd820d934ca983947",
-  "workflowRunId": "43385680346",
-  "workflowUrl": "https://github.com/w-xuefeng/minfo/actions/runs/43385680346",
-  "pagesReleaseTag": "minfo-pages-build-43385680346-1",
-  "builtAt": "2026-11-13T07:26:20.963Z"
+  "sourceCommit": "dd9d0f4c50c72a2640b9fc8a8288d9d45adfb7ba",
+  "workflowRunId": "43410882259",
+  "workflowUrl": "https://github.com/w-xuefeng/minfo/actions/runs/43410882259",
+  "pagesReleaseTag": "minfo-pages-build-43410882259-1",
+  "builtAt": "2026-11-13T10:41:05.565Z"
 }

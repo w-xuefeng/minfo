@@ -3,6 +3,7 @@ import type { FFmpeg, LogEventCallback, ProgressEventCallback } from '@ffmpeg/ff
 
 import { buildFfmpegArguments, exportableCovers } from '@/application/ffmpeg-arguments'
 import {
+  lyricsInputSourceFromMetadata,
   managedLyricsNativeTagKeys,
   parseLyricsSlots,
 } from '@/application/audio-metadata-reader'
@@ -17,9 +18,10 @@ import {
 import { getBrowserAudioFormat } from '@/domain/audio-formats'
 import { getExtension } from '@/domain/format'
 import {
-  lyricsManifestMetadataKeys,
+  lyricsVerificationMetadataKeysForFormat,
   normalizeLyricsSlots,
-  ordinaryLyricsMetadataTags,
+  ordinaryLyricsMetadataTagsForFormat,
+  verifiesParsedLyricsLanguageManifest,
 } from '@/domain/lyrics'
 import type {
   CoverArtwork,
@@ -361,29 +363,32 @@ const assertAacMetadata = (
 }
 
 /**
- * The editable lyrics slots are a complete output manifest. FFprobe therefore
- * verifies both the requested ordinary tags and the absence of every managed
- * source alias, such as `TXXX:lyrics-eng`.
+ * The editable lyrics slots are the requested output manifest. FFprobe only
+ * verifies fields the selected container configuration can actually express;
+ * for example M4A verifies its primary `lyrics`/©lyr text but not ID3-style
+ * language helpers or secondary language slots.
  */
 export const assertOrdinaryLyricsReadback = (
   document: FfprobeDocument,
+  format: StableOutputFormat,
   draft: MetadataDraft,
   original: MetadataDraft,
   managedLyricsSourceTagKeys: readonly string[] = [],
 ): void => {
   const expected = new Map(
-    ordinaryLyricsMetadataTags(draft.lyricsSlots).map((tag) => [
+    ordinaryLyricsMetadataTagsForFormat(format, draft.lyricsSlots).map((tag) => [
       tag.key,
       { value: tag.value, language: tag.language, primary: tag.primary },
     ]),
   )
-  const keys = new Set([
-    ...managedLyricsSourceTagKeys.map((key) => key.trim()).filter(Boolean),
-    ...lyricsManifestMetadataKeys(original.lyricsSlots),
-    ...lyricsManifestMetadataKeys(draft.lyricsSlots),
-  ])
-  if (keys.size === 0) return
-  const checks: readonly [boolean, string][] = [...keys].map((key) => {
+  const keys = lyricsVerificationMetadataKeysForFormat(
+    format,
+    original.lyricsSlots,
+    draft.lyricsSlots,
+    managedLyricsSourceTagKeys,
+  )
+  if (keys.length === 0) return
+  const checks: readonly [boolean, string][] = keys.map((key) => {
     const current = expected.get(key)
     const expectedValue = normalizeText(current?.value ?? '')
     const label =
@@ -403,14 +408,16 @@ export const assertOrdinaryLyricsReadback = (
 }
 
 /**
- * FFprobe verifies the exact ordinary lyrics tags. A second parser can expose
- * the same native frame with a different descriptor or timestamp formatting,
- * so it is only a veto when it finds a language absent from the form.
+ * FFprobe verifies the configured ordinary lyrics tags. Where the target can
+ * reconstruct language-qualified slots, a second parser is only a veto when
+ * it finds a language absent from the form; it otherwise skips this check.
  */
 export const assertLyricsManifestReadback = (
   actualSlots: readonly LyricsSlot[],
   draft: MetadataDraft,
+  format: StableOutputFormat,
 ): void => {
+  if (!verifiesParsedLyricsLanguageManifest(format)) return
   const expectedLanguages = new Set(
     normalizeLyricsSlots(draft.lyricsSlots).map((slot) => slot.language),
   )
@@ -489,10 +496,21 @@ const verifyMetadata = async (
     throw new Error(`导出后的${failed[1]}未通过回读验证，已取消下载。`)
   }
 
-  assertOrdinaryLyricsReadback(probeDocument, draft, original, managedLyricsSourceTagKeys)
-  assertLyricsManifestReadback(
-    parseLyricsSlots(metadata.common.lyrics, metadata.native).slots,
+  assertOrdinaryLyricsReadback(
+    probeDocument,
+    format,
     draft,
+    original,
+    managedLyricsSourceTagKeys,
+  )
+  assertLyricsManifestReadback(
+    parseLyricsSlots(
+      metadata.common.lyrics,
+      metadata.native,
+      lyricsInputSourceFromMetadata(metadata),
+    ).slots,
+    draft,
+    format,
   )
   assertCovers(common.picture ?? [], expectedCovers, hasPlanRisk(plan, 'cover-roles'))
   assertRawTags(metadata.native, draft, original, unverifiedRawTagKeys(plan, draft, original))

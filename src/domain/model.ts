@@ -98,6 +98,10 @@ export interface NativeTag {
   readonly value: string
   /** A recognized private payload MINFO deliberately does not edit or verify. */
   readonly handling?: 'opaque-private'
+  /** Whether the selected source-format reader mapped this tag into lyric slots. */
+  readonly lyricsSlotManaged?: boolean
+  /** Present only for a managed ordinary/synchronised lyrics source tag. */
+  readonly lyricsRepresentation?: LyricsSlot['representation']
 }
 
 export interface InspectionResult {

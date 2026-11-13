@@ -1,3 +1,11 @@
+import {
+  genericLocalLyricsFormatCapability,
+  lyricsFormatCapabilityFor,
+  type LyricsFormatCapability,
+  type LyricsFormatField,
+  type LyricsMetadataKeyTemplate,
+} from './lyrics-format-capabilities'
+import type { BrowserOutputFormat } from './audio-formats'
 import type { LyricsSlot } from './model'
 
 /** Values offered before the user creates a different language code. */
@@ -142,38 +150,225 @@ export interface OrdinaryLyricsMetadataTag {
   readonly primary: boolean
 }
 
+interface LyricsMetadataEntry extends OrdinaryLyricsMetadataTag {
+  readonly field: LyricsFormatField
+}
+
+export interface LyricsFormatLimitation {
+  readonly field: LyricsFormatField
+  readonly languages: readonly string[]
+  readonly description: string
+}
+
+const metadataKey = (template: LyricsMetadataKeyTemplate, language: string): string =>
+  template.replace('{language}', language)
+
+const metadataEntriesForCapability = (
+  slots: readonly LyricsSlot[],
+  capability: LyricsFormatCapability,
+): readonly LyricsMetadataEntry[] =>
+  normalizeLyricsSlots(slots).flatMap<LyricsMetadataEntry>((slot, index) => {
+    if (!isLyricsLanguage(slot.language)) {
+      throw new Error(lyricsLanguageValidationMessage)
+    }
+
+    if (index === 0) {
+      const entries: LyricsMetadataEntry[] = []
+      const primaryText = capability.fields.primaryText
+      if (primaryText.write) {
+        entries.push({
+          field: 'primaryText',
+          key: metadataKey(primaryText.metadataKeyTemplate, slot.language),
+          value: slot.text,
+          language: slot.language,
+          primary: true,
+        })
+      }
+      const primaryLanguage = capability.fields.primaryLanguage
+      if (primaryLanguage.write) {
+        entries.push({
+          field: 'primaryLanguage',
+          key: metadataKey(primaryLanguage.metadataKeyTemplate, slot.language),
+          value: slot.language,
+          language: slot.language,
+          primary: true,
+        })
+      }
+      return entries
+    }
+
+    const additionalSlots = capability.fields.additionalLanguageSlots
+    return additionalSlots.write
+      ? [
+          {
+            field: 'additionalLanguageSlots',
+            key: metadataKey(additionalSlots.metadataKeyTemplate, slot.language),
+            value: slot.text,
+            language: slot.language,
+            primary: false,
+          },
+        ]
+      : []
+  })
+
+const asOrdinaryLyricsMetadataTag = (
+  entry: LyricsMetadataEntry,
+): OrdinaryLyricsMetadataTag => ({
+  key: entry.key,
+  value: entry.value,
+  language: entry.language,
+  primary: entry.primary,
+})
+
 /**
- * The first slot is the ordinary, broadly-readable lyrics field. Additional
- * slots use language-qualified ordinary tags; the export plan flags their
- * cross-container interoperability as a confirmation risk.
+ * The generic local-command behavior used before format-specific browser
+ * support existed. Browser exports must use `ordinaryLyricsMetadataTagsForFormat`.
  */
 export const ordinaryLyricsMetadataTags = (
   slots: readonly LyricsSlot[],
 ): readonly OrdinaryLyricsMetadataTag[] =>
-  normalizeLyricsSlots(slots).flatMap<OrdinaryLyricsMetadataTag>((slot, index) => {
-    if (!isLyricsLanguage(slot.language)) {
-      throw new Error(lyricsLanguageValidationMessage)
-    }
-    if (index === 0) {
-      return [
-        { key: 'lyrics', value: slot.text, language: slot.language, primary: true },
-        {
-          key: 'lyrics_language',
-          value: slot.language,
-          language: slot.language,
-          primary: true,
-        },
-      ]
-    }
-    return [
-      {
-        key: `lyrics-${slot.language}`,
-        value: slot.text,
-        language: slot.language,
-        primary: false,
-      },
-    ]
-  })
+  metadataEntriesForCapability(slots, genericLocalLyricsFormatCapability).map(
+    asOrdinaryLyricsMetadataTag,
+  )
+
+/**
+ * The exact generic metadata fields that the selected browser target can
+ * write. For M4A this intentionally contains only the primary `lyrics` field;
+ * FFmpeg maps it to the M4A `©lyr` atom and ignores the ID3-style helpers.
+ */
+export const ordinaryLyricsMetadataTagsForFormat = (
+  format: BrowserOutputFormat,
+  slots: readonly LyricsSlot[],
+): readonly OrdinaryLyricsMetadataTag[] =>
+  metadataEntriesForCapability(slots, lyricsFormatCapabilityFor(format)).map(
+    asOrdinaryLyricsMetadataTag,
+  )
+
+/**
+ * Fields that the requested target cannot represent from the current editable
+ * slot collection. The caller turns these into a preflight acknowledgement;
+ * they must never become an impossible FFprobe-readback requirement.
+ */
+export const lyricsFormatLimitations = (
+  format: BrowserOutputFormat,
+  slots: readonly LyricsSlot[],
+): readonly LyricsFormatLimitation[] => {
+  const normalizedSlots = normalizeLyricsSlots(slots)
+  if (normalizedSlots.length === 0) return []
+
+  const capability = lyricsFormatCapabilityFor(format)
+  const limitations: LyricsFormatLimitation[] = []
+  const addIfUnsupported = (field: LyricsFormatField, languages: readonly string[]): void => {
+    const config = capability.fields[field]
+    if (config.write || languages.length === 0) return
+    limitations.push({
+      field,
+      languages,
+      description: config.unsupportedDescription ?? '当前目标格式无法表达此歌词字段。',
+    })
+  }
+
+  addIfUnsupported('primaryText', [normalizedSlots[0]!.language])
+  addIfUnsupported('primaryLanguage', [normalizedSlots[0]!.language])
+  addIfUnsupported(
+    'additionalLanguageSlots',
+    normalizedSlots.slice(1).map((slot) => slot.language),
+  )
+  return limitations
+}
+
+const configuredMetadataKeys = (
+  slots: readonly LyricsSlot[],
+  capability: LyricsFormatCapability,
+  includes: (field: LyricsFormatField) => boolean,
+): readonly string[] => {
+  const normalizedSlots = normalizeLyricsSlots(slots)
+  if (normalizedSlots.length === 0) return []
+
+  const primaryLanguage = normalizedSlots[0]!.language
+  const keys = new Set<string>()
+  if (includes('primaryText')) {
+    keys.add(metadataKey(capability.fields.primaryText.metadataKeyTemplate, primaryLanguage))
+  }
+  if (includes('primaryLanguage')) {
+    keys.add(
+      metadataKey(capability.fields.primaryLanguage.metadataKeyTemplate, primaryLanguage),
+    )
+  }
+  if (includes('additionalLanguageSlots')) {
+    normalizedSlots.forEach((slot) =>
+      keys.add(
+        metadataKey(
+          capability.fields.additionalLanguageSlots.metadataKeyTemplate,
+          slot.language,
+        ),
+      ),
+    )
+  }
+  return [...keys]
+}
+
+/**
+ * Metadata keys to clear before adding the slot manifest. This uses the same
+ * target configuration as writing, so M4A never receives ID3-style language
+ * helper writes that its MOV/IPOD muxer cannot preserve.
+ */
+export const lyricsMetadataKeysToClearForFormat = (
+  format: BrowserOutputFormat,
+  originalSlots: readonly LyricsSlot[],
+  draftSlots: readonly LyricsSlot[],
+  managedSourceTagKeys: readonly string[] = [],
+): readonly string[] => {
+  const capability = lyricsFormatCapabilityFor(format)
+  const keys = new Set<string>()
+  if (capability.manageSourceAliases) {
+    managedSourceTagKeys
+      .map((key) => key.trim())
+      .filter(Boolean)
+      .forEach((key) => keys.add(key))
+  }
+  const addsWrittenField = (field: LyricsFormatField): boolean => capability.fields[field].write
+  configuredMetadataKeys(originalSlots, capability, addsWrittenField).forEach((key) =>
+    keys.add(key),
+  )
+  configuredMetadataKeys(draftSlots, capability, addsWrittenField).forEach((key) =>
+    keys.add(key),
+  )
+  return [...keys]
+}
+
+/**
+ * FFprobe keys that are a hard verification contract for this target. Source
+ * aliases only participate for formats whose generic metadata path can expose
+ * them; M4A deliberately verifies `lyrics`/`©lyr` alone.
+ */
+export const lyricsVerificationMetadataKeysForFormat = (
+  format: BrowserOutputFormat,
+  originalSlots: readonly LyricsSlot[],
+  draftSlots: readonly LyricsSlot[],
+  managedSourceTagKeys: readonly string[] = [],
+): readonly string[] => {
+  const capability = lyricsFormatCapabilityFor(format)
+  const keys = new Set<string>()
+  if (capability.manageSourceAliases) {
+    managedSourceTagKeys
+      .map((key) => key.trim())
+      .filter(Boolean)
+      .forEach((key) => keys.add(key))
+  }
+  const addsVerifiableField = (field: LyricsFormatField): boolean =>
+    capability.fields[field].verify
+  configuredMetadataKeys(originalSlots, capability, addsVerifiableField).forEach((key) =>
+    keys.add(key),
+  )
+  configuredMetadataKeys(draftSlots, capability, addsVerifiableField).forEach((key) =>
+    keys.add(key),
+  )
+  return [...keys]
+}
+
+export const verifiesParsedLyricsLanguageManifest = (format: BrowserOutputFormat): boolean =>
+  lyricsFormatCapabilityFor(format).verifyParsedLanguageManifest
 
 /**
  * Metadata keys that may represent these slots after an FFmpeg container

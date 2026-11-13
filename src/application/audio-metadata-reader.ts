@@ -8,6 +8,11 @@ import {
   isLyricsLanguage,
   normalizeLyricsLanguage,
 } from '@/domain/lyrics'
+import {
+  lyricsInputCapabilityForSource,
+  type LyricsInputFormatCapability,
+  type LyricsInputSource,
+} from '@/domain/lyrics-input-format-capabilities'
 import { emptyDraft } from '@/domain/model'
 import type {
   CoverArtwork,
@@ -88,66 +93,78 @@ const normalizedNativeTagName = (value: string): string =>
     .toLowerCase()
     .replace(/[_.:/\s]+/g, '-')
 
-const isNativeLyricsLanguageTag = (id: string): boolean =>
-  nativeTagNameVariants(id).some((name) => {
+const nativeTagTypeIsAllowed = (
+  type: string,
+  capability: LyricsInputFormatCapability,
+): boolean =>
+  capability.nativeTagTypeTerms.length === 0 ||
+  capability.nativeTagTypeTerms.some((term) =>
+    normalizedNativeTagName(type).includes(normalizedNativeTagName(term)),
+  )
+
+const isNativeLyricsLanguageTag = (
+  tag: Pick<NativeLyricsTag, 'type' | 'id'>,
+  capability: LyricsInputFormatCapability,
+): boolean =>
+  nativeTagTypeIsAllowed(tag.type, capability) &&
+  nativeTagNameVariants(tag.id).some((name) =>
+    capability.languageDeclarationAliases.includes(normalizedNativeTagName(name)),
+  )
+
+const escapeForRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+const nativeLyricsTagKind = (
+  tag: Pick<NativeLyricsTag, 'type' | 'id'>,
+  capability: LyricsInputFormatCapability,
+): NativeLyricsTagKind | null => {
+  if (
+    !nativeTagTypeIsAllowed(tag.type, capability) ||
+    isNativeLyricsLanguageTag(tag, capability)
+  )
+    return null
+
+  for (const name of nativeTagNameVariants(tag.id)) {
     const normalized = normalizedNativeTagName(name)
-    return (
-      /(?:^|-)(?:lyrics?|lyric)-(?:language|lang)$/.test(normalized) ||
-      /(?:^|-)(?:language|lang)-(?:lyrics?|lyric)$/.test(normalized) ||
-      /(?:^|-)(?:lyrics?|lyric)(?:language|lang)$/.test(normalized) ||
-      /(?:^|-)(?:language|lang)(?:lyrics?|lyric)$/.test(normalized)
-    )
-  })
-
-const nativeLyricsAliases: readonly {
-  readonly name: string
-  readonly representation: LyricsSlot['representation']
-}[] = [
-  { name: 'unsynchronized-lyrics', representation: 'plain' },
-  { name: 'unsynchronised-lyrics', representation: 'plain' },
-  { name: 'synchronized-lyrics', representation: 'synchronised' },
-  { name: 'synchronised-lyrics', representation: 'synchronised' },
-  { name: 'unsynced-lyrics', representation: 'plain' },
-  { name: 'synced-lyrics', representation: 'synchronised' },
-  { name: 'unsynchronizedlyrics', representation: 'plain' },
-  { name: 'unsynchronisedlyrics', representation: 'plain' },
-  { name: 'synchronizedlyrics', representation: 'synchronised' },
-  { name: 'synchronisedlyrics', representation: 'synchronised' },
-  { name: 'unsyncedlyrics', representation: 'plain' },
-  { name: 'syncedlyrics', representation: 'synchronised' },
-  { name: 'sylt', representation: 'synchronised' },
-  { name: 'uslt', representation: 'plain' },
-  { name: 'ult', representation: 'plain' },
-  { name: '©lyr', representation: 'plain' },
-  { name: 'lyrics', representation: 'plain' },
-  { name: 'lyric', representation: 'plain' },
-]
-
-const nativeLyricsTagKind = (id: string): NativeLyricsTagKind | null => {
-  if (isNativeLyricsLanguageTag(id)) return null
-
-  for (const name of nativeTagNameVariants(id)) {
-    const normalized = normalizedNativeTagName(name)
-    for (const alias of nativeLyricsAliases) {
-      const match = new RegExp(`(?:^|-)${alias.name}(?:-([a-z0-9]+(?:-[a-z0-9]+)*))?$`).exec(
-        normalized,
-      )
-      if (match) {
-        return {
-          ...(match[1] ? { language: match[1] } : {}),
-          representation: alias.representation,
-        }
+    for (const alias of capability.nativeLyricsAliases) {
+      const suffix = alias.acceptsLanguageSuffix ? '(?:-([a-z0-9]+(?:-[a-z0-9]+)*))?' : ''
+      const match = new RegExp(`^${escapeForRegExp(alias.name)}${suffix}$`).exec(normalized)
+      if (!match) continue
+      return {
+        ...(match[1] ? { language: match[1] } : {}),
+        representation: alias.representation,
       }
     }
   }
   return null
 }
 
-export const isManagedLyricsNativeTag = (id: string): boolean =>
-  isNativeLyricsLanguageTag(id) || nativeLyricsTagKind(id) !== null
+const genericLyricsInputCapability = lyricsInputCapabilityForSource()
+
+/**
+ * Broad recognition retained for export cleanup. Import and form readback use
+ * the source-specific configuration in `parseLyricsSlots` instead.
+ */
+export const isManagedLyricsNativeTag = (id: string): boolean => {
+  const tag = { type: '', id }
+  return (
+    isNativeLyricsLanguageTag(tag, genericLyricsInputCapability) ||
+    nativeLyricsTagKind(tag, genericLyricsInputCapability) !== null
+  )
+}
 
 export const isSynchronisedLyricsNativeTag = (id: string): boolean =>
-  nativeLyricsTagKind(id)?.representation === 'synchronised'
+  nativeLyricsTagKind({ type: '', id }, genericLyricsInputCapability)?.representation ===
+  'synchronised'
+
+/** Prefer the source-format decision recorded at import over generic aliases. */
+export const isManagedLyricsSourceTag = (tag: NativeTag): boolean =>
+  tag.lyricsSlotManaged ?? isManagedLyricsNativeTag(tag.id)
+
+/** Prefer the source-format decision recorded at import over generic aliases. */
+export const isSynchronisedLyricsSourceTag = (tag: NativeTag): boolean =>
+  tag.lyricsSlotManaged === undefined
+    ? isSynchronisedLyricsNativeTag(tag.id)
+    : tag.lyricsRepresentation === 'synchronised'
 
 /**
  * Exact source identifiers that belong exclusively to the lyrics-slot model.
@@ -159,7 +176,7 @@ export const managedLyricsNativeTagKeys = (
 ): readonly string[] => [
   ...new Set(
     nativeTags
-      .filter((tag) => isManagedLyricsNativeTag(tag.id))
+      .filter(isManagedLyricsSourceTag)
       .map((tag) => tag.id.trim())
       .filter(Boolean),
   ),
@@ -218,10 +235,11 @@ const nativeLyricsTags = (
 
 const nativeLyricsLanguageDeclarations = (
   tags: readonly NativeLyricsTag[],
+  capability: LyricsInputFormatCapability,
 ): ReadonlyMap<string, string> => {
   const languageByType = new Map<string, string>()
   for (const tag of tags) {
-    if (!isNativeLyricsLanguageTag(tag.id)) continue
+    if (!isNativeLyricsLanguageTag(tag, capability)) continue
     const language = stringValues(tag.value).map(normalizeLyricsLanguage).find(isLyricsLanguage)
     if (language) languageByType.set(tag.type, language)
   }
@@ -233,12 +251,14 @@ interface ParsedLyricsSlots {
   readonly warnings: readonly string[]
 }
 
-type AppendLyricsResult = 'added' | 'merged' | 'duplicate'
+type AppendLyricsResult = 'added' | 'merged' | 'duplicate' | 'ignored'
 
 export const parseLyricsSlots = (
   lyrics: readonly ILyricsTag[] | undefined,
   native?: IAudioMetadata['native'],
+  source: LyricsInputSource = {},
 ): ParsedLyricsSlots => {
+  const capability = lyricsInputCapabilityForSource(source)
   const slots: LyricsSlot[] = []
   const slotsByLanguage = new Map<string, number>()
   const slotTextFingerprints = new Map<string, Set<string>>()
@@ -246,12 +266,21 @@ export const parseLyricsSlots = (
   const warnedLanguages = new Set<string>()
   const standardTextFingerprints = new Set<string>()
   const tags = nativeLyricsTags(native)
-  const languagesByType = nativeLyricsLanguageDeclarations(tags)
+  const languagesByType = nativeLyricsLanguageDeclarations(tags, capability)
   const declaredNativeLanguages = [...new Set(languagesByType.values())]
   const inferredNativeLanguage =
+    capability.commonLyricsLanguage === 'reported-or-declared' &&
     declaredNativeLanguages.length === 1
       ? (declaredNativeLanguages[0] ?? defaultLyricsLanguage)
       : defaultLyricsLanguage
+  let warnedSlotLimit = false
+  let notedDefaultLanguage = false
+
+  const noteDefaultLanguage = (): void => {
+    if (notedDefaultLanguage || !capability.defaultLanguageNotice) return
+    warnings.push(capability.defaultLanguageNotice)
+    notedDefaultLanguage = true
+  }
 
   const sourceFingerprint = (language: string, text: string): string =>
     `${language}\u0000${lyricsTextFingerprint(text)}`
@@ -260,6 +289,21 @@ export const parseLyricsSlots = (
     const fingerprint = lyricsTextFingerprint(next.text)
     if (!fingerprint) return 'duplicate'
     const existingIndex = slotsByLanguage.get(next.language)
+    const existingFingerprints =
+      existingIndex === undefined ? undefined : slotTextFingerprints.get(next.language)
+    const wouldAddDistinctSource =
+      existingIndex === undefined || !existingFingerprints?.has(fingerprint)
+    if (
+      capability.maximumSlots !== undefined &&
+      slots.length >= capability.maximumSlots &&
+      wouldAddDistinctSource
+    ) {
+      if (!warnedSlotLimit && capability.maximumSlotsWarning) {
+        warnings.push(capability.maximumSlotsWarning)
+        warnedSlotLimit = true
+      }
+      return 'ignored'
+    }
     if (existingIndex === undefined) {
       slotsByLanguage.set(next.language, slots.length)
       slotTextFingerprints.set(next.language, new Set([fingerprint]))
@@ -267,7 +311,7 @@ export const parseLyricsSlots = (
       return 'added'
     }
 
-    const fingerprints = slotTextFingerprints.get(next.language)
+    const fingerprints = existingFingerprints
     if (fingerprints?.has(fingerprint)) return 'duplicate'
     fingerprints?.add(fingerprint)
     const existing = slots[existingIndex]
@@ -290,7 +334,12 @@ export const parseLyricsSlots = (
     const synchronisedText = (item.syncText ?? []).length ? synchronisedLyricsText(item) : ''
     const text = synchronisedText || plainText
     if (!text) continue
-    const declaredLanguage = normalizeLyricsLanguage(item.language || inferredNativeLanguage)
+    if (capability.commonLyricsLanguage === 'und') noteDefaultLanguage()
+    const declaredLanguage = normalizeLyricsLanguage(
+      capability.commonLyricsLanguage === 'und'
+        ? defaultLyricsLanguage
+        : item.language || inferredNativeLanguage,
+    )
     const language = isLyricsLanguage(declaredLanguage)
       ? declaredLanguage
       : defaultLyricsLanguage
@@ -308,7 +357,7 @@ export const parseLyricsSlots = (
       sourceCount: 1,
     }
     const result = append(next)
-    standardTextFingerprints.add(sourceFingerprint(language, text))
+    if (result !== 'ignored') standardTextFingerprints.add(sourceFingerprint(language, text))
     if (result === 'merged' && !warnedLanguages.has(language)) {
       warnedLanguages.add(language)
       warnings.push(
@@ -319,15 +368,18 @@ export const parseLyricsSlots = (
 
   let nativeIndex = 0
   for (const tag of tags) {
-    const kind = nativeLyricsTagKind(tag.id)
+    const kind = nativeLyricsTagKind(tag, capability)
     if (!kind) continue
     for (const value of nativeLyricsValues(tag.value)) {
+      if (capability.commonLyricsLanguage === 'und') noteDefaultLanguage()
       const fingerprint = lyricsTextFingerprint(value.text)
       const declaredLanguage = normalizeLyricsLanguage(
-        value.language ??
-          kind.language ??
-          languagesByType.get(tag.type) ??
-          defaultLyricsLanguage,
+        capability.commonLyricsLanguage === 'und'
+          ? defaultLyricsLanguage
+          : (value.language ??
+              kind.language ??
+              languagesByType.get(tag.type) ??
+              defaultLyricsLanguage),
       )
       const language = isLyricsLanguage(declaredLanguage)
         ? declaredLanguage
@@ -357,7 +409,7 @@ export const parseLyricsSlots = (
         text: value.text,
         sourceCount: 1,
       })
-      if (result !== 'duplicate') nativeIndex += 1
+      if (result !== 'duplicate' && result !== 'ignored') nativeIndex += 1
     }
   }
 
@@ -474,40 +526,68 @@ export const classifyMetadataQualityMessages = (
   }
 }
 
-export const collectNativeTags = (metadata: IAudioMetadata): NativeTag[] =>
-  Object.entries(metadata.native).flatMap(([type, tags]) =>
-    tags.map((tag) => ({
-      type,
-      id: tag.id,
-      value: toText(tag.value),
-      ...(isVerifiedXmpPrivateMetadata(tag.id, tag.value)
-        ? { handling: 'opaque-private' as const }
-        : {}),
-    })),
+export const collectNativeTags = (
+  metadata: IAudioMetadata,
+  source: LyricsInputSource = {},
+): NativeTag[] => {
+  const capability = lyricsInputCapabilityForSource(source)
+  return Object.entries(metadata.native).flatMap(([type, tags]) =>
+    tags.map((tag) => {
+      const sourceTag = { type, id: tag.id }
+      const lyricsKind = nativeLyricsTagKind(sourceTag, capability)
+      const lyricsSlotManaged =
+        lyricsKind !== null || isNativeLyricsLanguageTag(sourceTag, capability)
+      return {
+        type,
+        id: tag.id,
+        value: toText(tag.value),
+        lyricsSlotManaged,
+        ...(lyricsKind ? { lyricsRepresentation: lyricsKind.representation } : {}),
+        ...(isVerifiedXmpPrivateMetadata(tag.id, tag.value)
+          ? { handling: 'opaque-private' as const }
+          : {}),
+      }
+    }),
   )
+}
 
-export const editableTextTags = (nativeTags: readonly NativeTag[]): EditableTag[] =>
-  nativeTags
-    // Structured native values (artwork, comments with descriptors, lyrics
-    // frames, etc.) are shown as read-only technical facts. Recognized lyric
-    // aliases are managed exclusively by the dedicated lyrics slots, avoiding
-    // two editable controls for the same source value. The generic editor only
-    // emits scalar text metadata and must not serialize JSON back as a fake tag
-    // value.
-    .filter(
-      (tag) =>
-        !isOpaquePrivateNativeTag(tag) &&
-        !isManagedLyricsNativeTag(tag.id) &&
-        tag.value &&
-        !tag.value.startsWith('[') &&
-        !tag.value.startsWith('{') &&
-        !tag.value.startsWith('"'),
-    )
-    .map((tag, index) => ({
-      id: `${tag.type}-${tag.id}-${index}`,
-      key: tag.id,
-      value: tag.value,
-    }))
+export const editableTextTags = (
+  nativeTags: readonly NativeTag[],
+  source: LyricsInputSource = {},
+): EditableTag[] => {
+  const capability = lyricsInputCapabilityForSource(source)
+  return (
+    nativeTags
+      // Structured native values (artwork, comments with descriptors, lyrics
+      // frames, etc.) are shown as read-only technical facts. Recognized lyric
+      // aliases are managed exclusively by the dedicated lyrics slots, avoiding
+      // two editable controls for the same source value. The generic editor only
+      // emits scalar text metadata and must not serialize JSON back as a fake tag
+      // value.
+      .filter(
+        (tag) =>
+          !isOpaquePrivateNativeTag(tag) &&
+          nativeLyricsTagKind(tag, capability) === null &&
+          !isNativeLyricsLanguageTag(tag, capability) &&
+          tag.value &&
+          !tag.value.startsWith('[') &&
+          !tag.value.startsWith('{') &&
+          !tag.value.startsWith('"'),
+      )
+      .map((tag, index) => ({
+        id: `${tag.type}-${tag.id}-${index}`,
+        key: tag.id,
+        value: tag.value,
+      }))
+  )
+}
+
+export const lyricsInputSourceFromMetadata = (metadata: IAudioMetadata): LyricsInputSource => ({
+  ...(metadata.format.container ? { container: metadata.format.container } : {}),
+  ...(metadata.format.codec ? { codec: metadata.format.codec } : {}),
+  tagTypes: metadata.format.tagTypes,
+  nativeTagTypes: Object.keys(metadata.native),
+})
 
 const toTechnicalInfo = (file: File, metadata: IAudioMetadata): TechnicalInfo => {
   const duration = metadata.format.duration
@@ -538,13 +618,14 @@ export const getFileIdentity = (file: File): FileIdentity => ({
 export const inspectAudioFile = async (file: File): Promise<InspectionResult> => {
   const metadata = await parseBlob(file, { duration: true })
   const { common } = metadata
-  const nativeTags = collectNativeTags(metadata)
+  const lyricsInputSource = lyricsInputSourceFromMetadata(metadata)
+  const nativeTags = collectNativeTags(metadata, lyricsInputSource)
   const hasVerifiedXmpPrivateMetadata = nativeTags.some(isOpaquePrivateNativeTag)
   const qualityMessages = classifyMetadataQualityMessages(
     metadata.quality.warnings.map((warning) => warning.message),
     hasVerifiedXmpPrivateMetadata,
   )
-  const lyricSlots = parseLyricsSlots(common.lyrics, metadata.native)
+  const lyricSlots = parseLyricsSlots(common.lyrics, metadata.native, lyricsInputSource)
   const mainComment = common.comment?.[0]
 
   return {
@@ -564,7 +645,7 @@ export const inspectAudioFile = async (file: File): Promise<InspectionResult> =>
       composers: common.composer ?? [],
       lyricsSlots: lyricSlots.slots,
       covers: (common.picture ?? []).map(mapPicture),
-      rawTags: editableTextTags(nativeTags),
+      rawTags: editableTextTags(nativeTags, lyricsInputSource),
     },
     technical: toTechnicalInfo(file, metadata),
     nativeTags,

@@ -5,7 +5,12 @@ import type {
   MetadataDraft,
   StableOutputFormat,
 } from '@/domain/model'
-import { lyricsManifestMetadataKeys, ordinaryLyricsMetadataTags } from '@/domain/lyrics'
+import {
+  lyricsManifestMetadataKeys,
+  lyricsMetadataKeysToClearForFormat,
+  ordinaryLyricsMetadataTags,
+  ordinaryLyricsMetadataTagsForFormat,
+} from '@/domain/lyrics'
 
 import {
   changedRawTags,
@@ -27,6 +32,12 @@ export interface FfmpegBuildOptions {
   readonly preserveAllSourceVideoStreams?: boolean
   /** Exact source lyrics identifiers that must be replaced by the slot manifest. */
   readonly managedLyricsSourceTagKeys?: readonly string[]
+  /**
+   * Browser targets use their configured lyrics field map. Omit only for the
+   * arbitrary local-command path, which intentionally retains generic FFmpeg
+   * metadata requests without a browser compatibility claim.
+   */
+  readonly lyricsFormat?: StableOutputFormat
 }
 
 export interface QualityParameters {
@@ -95,21 +106,36 @@ const presentMetadata = (key: string, value: string): string[] => [
 const ordinaryLyricsMetadataArguments = (
   draft: MetadataDraft,
   original: MetadataDraft,
-  managedLyricsSourceTagKeys: readonly string[] = [],
+  options: Pick<FfmpegBuildOptions, 'lyricsFormat' | 'managedLyricsSourceTagKeys'> = {},
 ): string[] => {
   const current = new Map(
-    ordinaryLyricsMetadataTags(draft.lyricsSlots).map((tag) => [tag.key, tag.value]),
+    (options.lyricsFormat
+      ? ordinaryLyricsMetadataTagsForFormat(options.lyricsFormat, draft.lyricsSlots)
+      : ordinaryLyricsMetadataTags(draft.lyricsSlots)
+    ).map((tag) => [tag.key, tag.value]),
   )
-  const sourceKeys = new Set([
-    ...managedLyricsSourceTagKeys.map((key) => key.trim()).filter(Boolean),
-    ...lyricsManifestMetadataKeys(original.lyricsSlots),
-    ...lyricsManifestMetadataKeys(draft.lyricsSlots),
-  ])
+  const sourceKeys = new Set(
+    options.lyricsFormat
+      ? lyricsMetadataKeysToClearForFormat(
+          options.lyricsFormat,
+          original.lyricsSlots,
+          draft.lyricsSlots,
+          options.managedLyricsSourceTagKeys,
+        )
+      : [
+          ...(options.managedLyricsSourceTagKeys ?? [])
+            .map((key) => key.trim())
+            .filter(Boolean),
+          ...lyricsManifestMetadataKeys(original.lyricsSlots),
+          ...lyricsManifestMetadataKeys(draft.lyricsSlots),
+        ],
+  )
   if (sourceKeys.size === 0) return []
 
-  // Lyrics slots are the final export manifest. Clear every known source key
-  // first (including container-specific aliases), then add only the current
-  // ordinary tags. This makes a deleted language an actual metadata deletion.
+  // Lyrics slots are the final export manifest, constrained by the selected
+  // target capability. Clear only the aliases and ordinary keys that target
+  // can express, then add only its configured current fields. Unsupported
+  // fields remain an explicit preflight downgrade rather than fake writes.
   return [
     ...[...sourceKeys].flatMap((key) => presentMetadata(key, '')),
     ...[...current].flatMap(([key, value]) => presentMetadata(key, value)),
@@ -193,11 +219,11 @@ export const exportableCovers = (
 export const buildMetadataArguments = (
   draft: MetadataDraft,
   originalDraft: MetadataDraft,
-  options: Pick<FfmpegBuildOptions, 'managedLyricsSourceTagKeys'> = {},
+  options: Pick<FfmpegBuildOptions, 'lyricsFormat' | 'managedLyricsSourceTagKeys'> = {},
 ): string[] => [
   ...rawMetadataArguments(draft, originalDraft),
   ...standardMetadataArguments(draft, originalDraft),
-  ...ordinaryLyricsMetadataArguments(draft, originalDraft, options.managedLyricsSourceTagKeys),
+  ...ordinaryLyricsMetadataArguments(draft, originalDraft, options),
 ]
 
 /**
@@ -269,6 +295,12 @@ export const buildFfmpegArguments = (
     args.push('-f', 'adts', '-write_id3v2', '1')
   }
 
-  args.push(...buildMetadataArguments(draft, originalDraft, options), paths.output)
+  args.push(
+    ...buildMetadataArguments(draft, originalDraft, {
+      ...options,
+      lyricsFormat: plan.resolvedFormat,
+    }),
+    paths.output,
+  )
   return args
 }

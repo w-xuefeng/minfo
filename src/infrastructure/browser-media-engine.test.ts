@@ -76,6 +76,7 @@ describe('assertOrdinaryLyricsReadback', () => {
             },
           },
         },
+        'mp3',
         draft,
         original,
         ['TXXX:lyrics-eng', 'lyrics-eng'],
@@ -117,6 +118,7 @@ describe('assertOrdinaryLyricsReadback', () => {
             },
           },
         },
+        'mp3',
         draft,
         original,
         ['TXXX:lyrics-eng', 'lyrics-eng'],
@@ -143,7 +145,7 @@ describe('assertOrdinaryLyricsReadback', () => {
     }
 
     expect(() =>
-      assertOrdinaryLyricsReadback({ format: { tags: {} } }, draft, original),
+      assertOrdinaryLyricsReadback({ format: { tags: {} } }, 'mp3', draft, original),
     ).toThrow('普通歌词')
   })
 
@@ -174,6 +176,7 @@ describe('assertOrdinaryLyricsReadback', () => {
           },
         ],
         draft,
+        'mp3',
       ),
     ).toThrow('当前表单之外的歌词语言（eng）')
   })
@@ -201,6 +204,51 @@ describe('assertOrdinaryLyricsReadback', () => {
           },
         ],
         draft,
+        'mp3',
+      ),
+    ).not.toThrow()
+  })
+
+  it('uses the M4A capability to verify only the primary ©lyr-mapped text', () => {
+    const draft = {
+      ...emptyDraft(),
+      lyricsSlots: [
+        {
+          id: 'zho',
+          language: 'zho',
+          descriptor: '',
+          representation: 'plain' as const,
+          text: '中文歌词',
+        },
+        {
+          id: 'eng',
+          language: 'eng',
+          descriptor: '',
+          representation: 'plain' as const,
+          text: 'English lyrics',
+        },
+      ],
+    }
+
+    expect(() =>
+      assertOrdinaryLyricsReadback(
+        { format: { tags: { lyrics: '中文歌词' } } },
+        'm4a',
+        draft,
+        draft,
+        ['TXXX:lyrics-eng', 'TXXX:lyrics_language'],
+      ),
+    ).not.toThrow()
+    expect(() =>
+      assertLyricsManifestReadback(
+        [
+          {
+            ...draft.lyricsSlots[0]!,
+            language: 'und',
+          },
+        ],
+        draft,
+        'm4a',
       ),
     ).not.toThrow()
   })

@@ -219,7 +219,7 @@ describe('renderFfmpegCommand', () => {
     expect(script).toContain("EXPECTED_EXTENSION='aac'")
   })
 
-  it('clears exact managed source lyric aliases in local scripts', () => {
+  it('uses the selected M4A lyrics capability in local scripts', () => {
     const original = {
       ...emptyDraft(),
       lyricsSlots: [
@@ -251,8 +251,9 @@ describe('renderFfmpegCommand', () => {
       paths: { sourcePath: '', outputPath: '', coverPaths: {} },
     })
 
-    expect(script).toContain("'-metadata' 'TXXX:lyrics-eng='")
-    expect(script).toContain("'-metadata' 'lyrics-eng='")
+    expect(script).not.toContain("'-metadata' 'TXXX:lyrics-eng='")
+    expect(script).not.toContain("'-metadata' 'lyrics-eng='")
+    expect(script).not.toContain("'-metadata' 'lyrics_language=zho'")
     expect(script).toContain("'-metadata' 'lyrics=中文歌词'")
   })
 })

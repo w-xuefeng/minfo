@@ -74,6 +74,45 @@ describe('buildExportPlan', () => {
     expect(plan.outputFileName).toBe('output.aac')
   })
 
+  it('requires acknowledgement before M4A drops a lyrics language identity or secondary slots', () => {
+    const draft = {
+      ...emptyDraft(),
+      lyricsSlots: [
+        {
+          id: 'zho',
+          language: 'zho',
+          descriptor: '',
+          representation: 'plain' as const,
+          text: '中文歌词',
+        },
+        {
+          id: 'eng',
+          language: 'eng',
+          descriptor: '',
+          representation: 'plain' as const,
+          text: 'English lyrics',
+        },
+      ],
+    }
+    const plan = buildExportPlan(
+      item({ draft, originalDraft: draft }),
+      {
+        format: 'original',
+        quality: 'high',
+        outputBaseName: 'output',
+        allowOverwrite: false,
+      },
+      runtime,
+    )
+
+    expect(plan.runnable).toBe(true)
+    expect(plan.risks.find((risk) => risk.id === 'lyrics-slot-compatibility')).toMatchObject({
+      title: '目标格式无法完整保留歌词槽位',
+      description: expect.stringContaining('©lyr'),
+      requiresConfirmation: true,
+    })
+  })
+
   it('recognizes an ADTS AAC source and permits its original-format plan', () => {
     const aac = item({
       identity: { name: 'source.aac', size: 5, lastModified: 1 },
@@ -343,6 +382,30 @@ describe('buildExportPlan', () => {
     expect(plan.risks.find((risk) => risk.id === 'sylt-copy-uncertain')).toMatchObject({
       requiresConfirmation: true,
     })
+  })
+
+  it('does not treat a source-reader-declined custom tag as a synchronised lyric frame', () => {
+    const plan = buildExportPlan(
+      item({
+        nativeTags: [
+          {
+            type: 'iTunes',
+            id: 'SYLT:eng',
+            value: 'custom value',
+            lyricsSlotManaged: false,
+          },
+        ],
+      }),
+      {
+        format: 'original',
+        quality: 'high',
+        outputBaseName: 'output',
+        allowOverwrite: false,
+      },
+      runtime,
+    )
+
+    expect(plan.risks.find((risk) => risk.id === 'sylt-copy-uncertain')).toBeUndefined()
   })
 
   it('asks before normalizing imported lyrics even when the slot form is unchanged', () => {

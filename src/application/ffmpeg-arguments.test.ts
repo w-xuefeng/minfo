@@ -116,6 +116,58 @@ describe('survivingCovers', () => {
     )
   })
 
+  it('uses the M4A lyrics capability instead of emitting ID3-style language helpers', () => {
+    const m4aPlan: ExportPlan = {
+      ...plan,
+      format: 'm4a',
+      requestedExtension: 'm4a',
+      resolvedFormat: 'm4a',
+      outputFileName: 'source (MINFO).m4a',
+      requiresTranscode: true,
+    }
+    const draft = {
+      ...emptyDraft(),
+      lyricsSlots: [
+        {
+          id: 'zho',
+          language: 'zho',
+          descriptor: '',
+          representation: 'plain' as const,
+          text: '中文歌词',
+        },
+        {
+          id: 'eng',
+          language: 'eng',
+          descriptor: '',
+          representation: 'plain' as const,
+          text: 'English lyrics',
+        },
+      ],
+    }
+
+    const argumentsList = buildFfmpegArguments(
+      m4aPlan,
+      draft,
+      emptyDraft(),
+      {
+        source: 'input.mp3',
+        covers: [],
+        output: 'output.m4a',
+      },
+      {
+        managedLyricsSourceTagKeys: ['TXXX:lyrics_language', 'TXXX:lyrics-eng'],
+      },
+    )
+
+    expect(argumentsList).toContain('lyrics=中文歌词')
+    expect(argumentsList).not.toContain('lyrics_language=')
+    expect(argumentsList).not.toContain('lyrics-eng=')
+    expect(argumentsList).not.toContain('TXXX:lyrics_language=')
+    expect(argumentsList).not.toContain('TXXX:lyrics-eng=')
+    expect(argumentsList).not.toContain('lyrics_language=zho')
+    expect(argumentsList).not.toContain('lyrics-eng=English lyrics')
+  })
+
   it('omits covers from an AAC copy instead of rejecting the plan', () => {
     const aacPlan: ExportPlan = {
       ...plan,

@@ -4,8 +4,11 @@ import {
   canonicalizeLyricsTextForComparison,
   duplicateLyricsLanguages,
   isLyricsLanguage,
+  lyricsFormatLimitations,
+  lyricsMetadataKeysToClearForFormat,
   normalizeLyricsLanguage,
   ordinaryLyricsMetadataTags,
+  ordinaryLyricsMetadataTagsForFormat,
   lyricsManifestMetadataKeys,
   suggestedLyricsLanguageLabel,
   suggestedLyricsLanguages,
@@ -121,5 +124,33 @@ describe('lyrics slots', () => {
       'lyrics_language',
       'lyrics-eng',
     ])
+  })
+
+  it('derives M4A lyrics fields and losses from the output capability configuration', () => {
+    const slots = [slot('zho', '中文'), slot('eng', 'English')]
+
+    expect(ordinaryLyricsMetadataTagsForFormat('m4a', slots)).toEqual([
+      { key: 'lyrics', value: '中文', language: 'zho', primary: true },
+    ])
+    expect(
+      lyricsMetadataKeysToClearForFormat('m4a', slots, slots, [
+        'TXXX:lyrics_language',
+        'TXXX:lyrics-eng',
+      ]),
+    ).toEqual(['lyrics'])
+    expect(lyricsFormatLimitations('m4a', slots)).toEqual([
+      {
+        field: 'primaryLanguage',
+        languages: ['zho'],
+        description: expect.stringContaining('歌词语言码字段'),
+      },
+      {
+        field: 'additionalLanguageSlots',
+        languages: ['eng'],
+        description: expect.stringContaining('其他语言'),
+      },
+    ])
+    expect(lyricsFormatLimitations('mp3', slots)).toEqual([])
+    expect(lyricsFormatLimitations('aac', slots)).toEqual([])
   })
 })

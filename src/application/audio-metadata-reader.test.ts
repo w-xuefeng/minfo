@@ -26,6 +26,27 @@ const nativeTags = (
   return grouped
 }
 
+const mp3Source = {
+  container: 'MPEG',
+  codec: 'MPEG 1 Layer 3',
+  tagTypes: ['ID3v2.4'],
+  nativeTagTypes: ['ID3v2.4'],
+} as const
+
+const m4aSource = {
+  container: 'MPEG-4',
+  codec: 'AAC',
+  tagTypes: ['iTunes'],
+  nativeTagTypes: ['iTunes'],
+} as const
+
+const adtsAacSource = {
+  container: 'ADTS/MPEG-4',
+  codec: 'AAC',
+  tagTypes: ['ID3v2.4'],
+  nativeTagTypes: ['ID3v2.4'],
+} as const
+
 describe('metadata inspection messages', () => {
   it('turns a verified XMP PRIV diagnostic into one non-blocking read notice', () => {
     expect(
@@ -160,6 +181,80 @@ describe('parseLyricsSlots', () => {
     ])
   })
 
+  it('uses the MP3 source capability for ID3 language helpers and qualified slots', () => {
+    const result = parseLyricsSlots(
+      [],
+      nativeTags([
+        { type: 'ID3v2.4', id: 'TXXX:lyrics', value: '中文歌词' },
+        { type: 'ID3v2.4', id: 'TXXX:lyrics_language', value: 'zho' },
+        { type: 'ID3v2.4', id: 'TXXX:lyrics-eng', value: 'English lyrics' },
+        { type: 'MP4', id: '©lyr', value: 'Must not join an MP3 source' },
+      ]),
+      mp3Source,
+    )
+
+    expect(result.slots.map(({ language, text }) => ({ language, text }))).toEqual([
+      { language: 'zho', text: '中文歌词' },
+      { language: 'eng', text: 'English lyrics' },
+    ])
+  })
+
+  it('uses the M4A source capability to map ©lyr to one unlabelled slot only', () => {
+    const result = parseLyricsSlots(
+      lyrics([{ language: 'eng', text: 'Primary M4A lyrics' }]),
+      nativeTags([
+        { type: 'iTunes', id: '©lyr', value: 'Primary M4A lyrics' },
+        { type: 'iTunes', id: 'lyrics-eng', value: 'Not an M4A standard lyric field' },
+        { type: 'iTunes', id: 'lyrics_language', value: 'eng' },
+      ]),
+      m4aSource,
+    )
+
+    expect(result.slots).toEqual([
+      {
+        id: 'lyrics-0',
+        language: 'und',
+        descriptor: '',
+        representation: 'plain',
+        text: 'Primary M4A lyrics',
+        sourceCount: 1,
+      },
+    ])
+    expect(result.warnings).toContain('M4A 的 ©lyr 不带标准歌词语言码，已作为 und 导入。')
+  })
+
+  it('warns and keeps the primary M4A lyric when source data exceeds its one-slot contract', () => {
+    const result = parseLyricsSlots(
+      [],
+      nativeTags([
+        { type: 'iTunes', id: '©lyr', value: 'Primary M4A lyrics' },
+        { type: 'iTunes', id: '©lyr', value: 'Second M4A lyric' },
+      ]),
+      m4aSource,
+    )
+
+    expect(result.slots).toHaveLength(1)
+    expect(result.slots[0]).toMatchObject({ language: 'und', text: 'Primary M4A lyrics' })
+    expect(result.warnings).toContain(
+      'M4A 的标准歌词字段只能读取一份普通歌词；额外不同歌词未进入编辑器。',
+    )
+  })
+
+  it('uses the ADTS AAC source capability instead of accepting an MP4 lyric atom', () => {
+    const result = parseLyricsSlots(
+      [],
+      nativeTags([
+        { type: 'ID3v2.4', id: 'TXXX:lyrics-eng', value: 'AAC English lyrics' },
+        { type: 'MP4', id: '©lyr', value: 'Must not join an ADTS source' },
+      ]),
+      adtsAacSource,
+    )
+
+    expect(result.slots.map(({ language, text }) => ({ language, text }))).toEqual([
+      { language: 'eng', text: 'AAC English lyrics' },
+    ])
+  })
+
   it('keeps parsed standard lyrics as the canonical source while retaining distinct native slots', () => {
     const result = parseLyricsSlots(
       lyrics([
@@ -284,6 +379,50 @@ describe('parseLyricsSlots', () => {
         value: '各自经过',
       },
     ])
+  })
+
+  it('keeps M4A custom lyric-looking fields in the raw-tag editor instead of treating them as ©lyr', () => {
+    expect(
+      editableTextTags(
+        [
+          { type: 'iTunes', id: '©lyr', value: 'M4A primary lyrics' },
+          { type: 'iTunes', id: 'lyrics_language', value: 'eng' },
+          { type: 'iTunes', id: 'lyrics-eng', value: 'Custom secondary lyrics' },
+        ],
+        m4aSource,
+      ),
+    ).toEqual([
+      {
+        id: 'iTunes-lyrics_language-0',
+        key: 'lyrics_language',
+        value: 'eng',
+      },
+      {
+        id: 'iTunes-lyrics-eng-1',
+        key: 'lyrics-eng',
+        value: 'Custom secondary lyrics',
+      },
+    ])
+  })
+
+  it('only marks source-configured M4A lyrics for later export cleanup', () => {
+    const tags = collectNativeTags(
+      {
+        native: nativeTags([
+          { type: 'iTunes', id: '©lyr', value: 'M4A primary lyrics' },
+          { type: 'iTunes', id: 'lyrics-eng', value: 'Custom secondary lyrics' },
+          { type: 'iTunes', id: 'lyrics_language', value: 'eng' },
+        ]),
+      } as IAudioMetadata,
+      m4aSource,
+    )
+
+    expect(tags.map(({ id, lyricsSlotManaged }) => ({ id, lyricsSlotManaged }))).toEqual([
+      { id: '©lyr', lyricsSlotManaged: true },
+      { id: 'lyrics-eng', lyricsSlotManaged: false },
+      { id: 'lyrics_language', lyricsSlotManaged: false },
+    ])
+    expect(managedLyricsNativeTagKeys(tags)).toEqual(['©lyr'])
   })
 
   it('keeps the exact recognized native identifiers for later export cleanup', () => {

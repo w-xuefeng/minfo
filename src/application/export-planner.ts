@@ -6,6 +6,7 @@ import {
   getResolvedFormat,
 } from '@/domain/format'
 import { parseLyricsPreview } from '@/domain/lrc'
+import { lyricsFormatLimitations } from '@/domain/lyrics'
 import {
   findRawTagConflicts,
   rawTagEditSafetyIssue,
@@ -13,8 +14,8 @@ import {
 } from './metadata-diff'
 import {
   isOpaquePrivateNativeTag,
-  isManagedLyricsNativeTag,
-  isSynchronisedLyricsNativeTag,
+  isManagedLyricsSourceTag,
+  isSynchronisedLyricsSourceTag,
 } from './audio-metadata-reader'
 import { survivingCovers } from './ffmpeg-arguments'
 import type {
@@ -94,15 +95,12 @@ export const buildExportPlan = (
   const outputBaseName = request.outputBaseName || defaultOutputBaseName(item.identity.name)
   const outputFileName = formatOutputFileName(outputBaseName, requestedExtension ?? 'audio')
   const risks: ExportRisk[] = []
-  const hasSynchronisedLyrics = item.nativeTags.some((tag) =>
-    isSynchronisedLyricsNativeTag(tag.id),
-  )
+  const hasSynchronisedLyrics = item.nativeTags.some(isSynchronisedLyricsSourceTag)
   const hasUnverifiedNativeMetadata = item.nativeTags.some(
     (tag) => !isOpaquePrivateNativeTag(tag),
   )
   const replacesImportedLyrics =
-    item.originalDraft.lyricsSlots.length > 0 ||
-    item.nativeTags.some((tag) => isManagedLyricsNativeTag(tag.id))
+    item.originalDraft.lyricsSlots.length > 0 || item.nativeTags.some(isManagedLyricsSourceTag)
   const rawTagConflicts = findRawTagConflicts(item.draft, item.originalDraft)
   const rawTagSafetyIssue = rawTagEditSafetyIssue(
     item.draft.rawTags,
@@ -119,6 +117,9 @@ export const buildExportPlan = (
   const hasAacCoverLoss = resolved === 'aac' && retainedCovers.length > 0
   const browserExportWarning = item.browserExportWarning
   const requiresTranscode = Boolean(resolved && (!source || source !== resolved))
+  const lyricsTargetLimitations = resolved
+    ? lyricsFormatLimitations(resolved, item.draft.lyricsSlots)
+    : []
 
   if (!source) {
     risks.push(
@@ -207,13 +208,27 @@ export const buildExportPlan = (
     )
   }
 
-  if (replacesImportedLyrics || item.draft.lyricsSlots.length > 1) {
+  if (
+    replacesImportedLyrics ||
+    item.draft.lyricsSlots.length > 1 ||
+    lyricsTargetLimitations.length > 0
+  ) {
+    const limitations = lyricsTargetLimitations
+      .map((limitation) => {
+        const languages = limitation.languages.length
+          ? `（${limitation.languages.join('、')}）`
+          : ''
+        return `${limitation.description}${languages}`
+      })
+      .join(' ')
     risks.push(
       risk(
         'lyrics-slot-compatibility',
         'lyrics-structure',
-        '歌词槽位会完整替换已识别的源歌词',
-        `当前草稿有 ${item.draft.lyricsSlots.length} 个歌词语言槽位。导出会先清除已识别的源歌词标签或帧，再将第一个槽位写入 lyrics / lyrics_language，其余槽位写入 lyrics-{language}；已删除的语言不会保留。播放器对二级普通标签的识别仍可能不同。`,
+        lyricsTargetLimitations.length > 0
+          ? '目标格式无法完整保留歌词槽位'
+          : '歌词槽位会完整替换已识别的源歌词',
+        `当前草稿有 ${item.draft.lyricsSlots.length} 个歌词语言槽位。导出会请求清除已识别的源歌词标签或帧，并按照所选目标的歌词字段配置写入可表达内容。${limitations ? ` ${limitations}` : ''} 已删除或目标无法表达的语言不会被伪装成完整保留；确认后仍会生成新的副本。`,
         true,
       ),
     )

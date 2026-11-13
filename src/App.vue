@@ -27,6 +27,7 @@ import type { RawTagConflict } from '@/application/metadata-diff'
 const workspace = createWorkspace()
 const picker = ref<HTMLInputElement | null>(null)
 const darkMode = ref(false)
+const brandLogoUrl = `${import.meta.env.BASE_URL}assets/imgs/logo.svg`
 const exportRequest = ref<ExportRequest>({
   format: 'original',
   quality: 'high',
@@ -151,7 +152,14 @@ onBeforeUnmount(() => {
   <div class="app-shell">
     <header class="app-header">
       <a class="brand" href="#workspace" aria-label="MINFO 音乐信息工作台">
-        <span class="brand-mark" aria-hidden="true">M</span>
+        <img
+          class="brand-logo"
+          :src="brandLogoUrl"
+          alt=""
+          width="36"
+          height="36"
+          aria-hidden="true"
+        />
         <span>
           <strong>MINFO</strong>
           <small>Music Information</small>

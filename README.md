@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./public/assets/imgs/logo.svg" width="96" height="96" alt="MINFO 标志" />
+</p>
+
 # MINFO
 
 MINFO（Music Information）用于在浏览器中整理本地音频文件的元数据。选择文件后，可以编辑标签、封面和歌词，并下载一个新的音频文件；源文件不会被上传或就地修改。

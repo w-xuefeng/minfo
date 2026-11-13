@@ -122,7 +122,7 @@ const canRecommendFallback = computed(
   () =>
     props.request.format !== browserFallbackFormat.id &&
     props.plan?.risks.some(
-      (risk) => risk.id === 'unsupported-target' || risk.id === 'aac-cover-omitted',
+      (risk) => risk.id === 'unsupported-target' || risk.id === 'cover-omitted',
     ),
 )
 

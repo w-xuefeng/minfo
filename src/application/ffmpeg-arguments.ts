@@ -11,6 +11,10 @@ import {
   ordinaryLyricsMetadataTags,
   ordinaryLyricsMetadataTagsForFormat,
 } from '@/domain/lyrics'
+import {
+  isCoverEmbeddableInOutput,
+  outputVerificationCapabilityFor,
+} from '@/domain/output-verification-capabilities'
 
 import {
   changedRawTags,
@@ -38,6 +42,11 @@ export interface FfmpegBuildOptions {
    * metadata requests without a browser compatibility claim.
    */
   readonly lyricsFormat?: StableOutputFormat
+  /**
+   * Browser targets use the same output capability for multi-value metadata
+   * serialization as they use for readback. Omit for arbitrary local formats.
+   */
+  readonly outputFormat?: StableOutputFormat
 }
 
 export interface QualityParameters {
@@ -96,7 +105,7 @@ export const qualityFor = (
   quality: AudioQualityPreset,
 ): QualityParameters => (format === 'mp3' ? mp3Quality[quality] : aacQuality[quality])
 
-const joined = (values: readonly string[]): string => values.join(' / ')
+const joined = (values: readonly string[], separator: string): string => values.join(separator)
 
 const presentMetadata = (key: string, value: string): string[] => [
   '-metadata',
@@ -142,7 +151,14 @@ const ordinaryLyricsMetadataArguments = (
   ]
 }
 
-const standardMetadataArguments = (draft: MetadataDraft, original: MetadataDraft): string[] => {
+const standardMetadataArguments = (
+  draft: MetadataDraft,
+  original: MetadataDraft,
+  outputFormat?: StableOutputFormat,
+): string[] => {
+  const multiValueSeparator = outputFormat
+    ? outputVerificationCapabilityFor(outputFormat).standardMetadata.multiValueSeparator
+    : ' / '
   const changed = changedStandardFields(draft, original)
   const track = draft.trackNo
     ? `${draft.trackNo}${draft.trackTotal ? `/${draft.trackTotal}` : ''}`
@@ -153,15 +169,15 @@ const standardMetadataArguments = (draft: MetadataDraft, original: MetadataDraft
 
   const fields: readonly [StandardMetadataField, string, string][] = [
     ['title', 'title', draft.title],
-    ['artists', 'artist', joined(draft.artists)],
+    ['artists', 'artist', joined(draft.artists, multiValueSeparator)],
     ['album', 'album', draft.album],
-    ['albumArtists', 'album_artist', joined(draft.albumArtists)],
-    ['genres', 'genre', joined(draft.genres)],
+    ['albumArtists', 'album_artist', joined(draft.albumArtists, multiValueSeparator)],
+    ['genres', 'genre', joined(draft.genres, multiValueSeparator)],
     ['releaseDate', 'date', draft.releaseDate],
     ['comment', 'comment', draft.comment],
     ['track', 'track', track],
     ['disc', 'disc', disc],
-    ['composers', 'composer', joined(draft.composers)],
+    ['composers', 'composer', joined(draft.composers, multiValueSeparator)],
   ]
 
   return fields.flatMap(([field, key, value]) =>
@@ -200,29 +216,46 @@ export const survivingCovers = (
 }
 
 /**
+ * Covers whose source stream or replacement file is addressable by the
+ * browser FFmpeg invocation. Target-specific support is deliberately applied
+ * later by `exportableCovers`, so the preflight can distinguish an unmapped
+ * input cover from one the selected container cannot carry.
+ */
+export const mappableSurvivingCovers = (
+  draft: MetadataDraft,
+  originalDraft: MetadataDraft,
+): readonly CoverArtwork[] =>
+  survivingCovers(draft, originalDraft).filter(
+    (cover) => cover.source === 'replacement' || cover.sourceIndex !== undefined,
+  )
+
+/**
  * Covers that the generic browser FFmpeg path can deliberately include in an
- * output copy. ADTS cannot carry attached pictures; unmapped source pictures
- * cannot be selected safely. Both are reported as confirmation risks by the
- * export plan rather than preventing creation of the new file.
+ * output copy. The output-verification capability is the single source for
+ * target image support; unmapped source pictures are handled separately by the
+ * export plan as a confirmation risk.
  */
 export const exportableCovers = (
   plan: ExportPlan,
   draft: MetadataDraft,
   originalDraft: MetadataDraft,
 ): readonly CoverArtwork[] => {
-  if (plan.resolvedFormat === 'aac') return []
-  return survivingCovers(draft, originalDraft).filter(
-    (cover) => cover.source === 'replacement' || cover.sourceIndex !== undefined,
+  if (!plan.resolvedFormat) return []
+  return mappableSurvivingCovers(draft, originalDraft).filter((cover) =>
+    isCoverEmbeddableInOutput(plan.resolvedFormat!, cover),
   )
 }
 
 export const buildMetadataArguments = (
   draft: MetadataDraft,
   originalDraft: MetadataDraft,
-  options: Pick<FfmpegBuildOptions, 'lyricsFormat' | 'managedLyricsSourceTagKeys'> = {},
+  options: Pick<
+    FfmpegBuildOptions,
+    'lyricsFormat' | 'managedLyricsSourceTagKeys' | 'outputFormat'
+  > = {},
 ): string[] => [
   ...rawMetadataArguments(draft, originalDraft),
-  ...standardMetadataArguments(draft, originalDraft),
+  ...standardMetadataArguments(draft, originalDraft, options.outputFormat),
   ...ordinaryLyricsMetadataArguments(draft, originalDraft, options),
 ]
 
@@ -248,7 +281,9 @@ export const buildFfmpegArguments = (
   }
   const coverPaths = paths.covers.slice(0, replacementCovers.length)
   const preserveAllSourceVideoStreams = Boolean(
-    options.preserveAllSourceVideoStreams && plan.resolvedFormat !== 'aac',
+    options.preserveAllSourceVideoStreams &&
+    outputVerificationCapabilityFor(plan.resolvedFormat).covers
+      .allowUnmappedSourceVisualStreamCopy,
   )
   const args = ['-hide_banner', '-nostdin', '-i', paths.source]
   for (const cover of coverPaths) {
@@ -299,6 +334,7 @@ export const buildFfmpegArguments = (
     ...buildMetadataArguments(draft, originalDraft, {
       ...options,
       lyricsFormat: plan.resolvedFormat,
+      outputFormat: plan.resolvedFormat,
     }),
     paths.output,
   )

@@ -8,6 +8,7 @@ import {
 import { parseLyricsPreview } from '@/domain/lrc'
 import { lyricsFormatLimitations } from '@/domain/lyrics'
 import {
+  changedRawTags,
   findRawTagConflicts,
   rawTagEditSafetyIssue,
   standardFieldRawTagSafetyIssue,
@@ -17,7 +18,14 @@ import {
   isManagedLyricsSourceTag,
   isSynchronisedLyricsSourceTag,
 } from './audio-metadata-reader'
-import { survivingCovers } from './ffmpeg-arguments'
+import { mappableSurvivingCovers, survivingCovers } from './ffmpeg-arguments'
+import {
+  coversOmittedByOutput,
+  isCoverEmbeddableInOutput,
+  outputDropsCoverRoleSemantics,
+  outputVerificationCapabilityFor,
+  shouldVerifyRawTagsExactly,
+} from '@/domain/output-verification-capabilities'
 import type {
   ExportPlan,
   ExportRequest,
@@ -95,6 +103,8 @@ export const buildExportPlan = (
   const outputBaseName = request.outputBaseName || defaultOutputBaseName(item.identity.name)
   const outputFileName = formatOutputFileName(outputBaseName, requestedExtension ?? 'audio')
   const risks: ExportRisk[] = []
+  const requiresTranscode = Boolean(resolved && (!source || source !== resolved))
+  const outputVerification = resolved ? outputVerificationCapabilityFor(resolved) : null
   const hasSynchronisedLyrics = item.nativeTags.some(isSynchronisedLyricsSourceTag)
   const hasUnverifiedNativeMetadata = item.nativeTags.some(
     (tag) => !isOpaquePrivateNativeTag(tag),
@@ -111,12 +121,20 @@ export const buildExportPlan = (
     item.originalDraft,
   )
   const retainedCovers = survivingCovers(item.draft, item.originalDraft)
+  const mappableCovers = mappableSurvivingCovers(item.draft, item.originalDraft)
+  const outputOmittedCovers = resolved ? coversOmittedByOutput(resolved, mappableCovers) : []
+  const outputCovers = resolved
+    ? mappableCovers.filter((cover) => isCoverEmbeddableInOutput(resolved, cover))
+    : []
+  const dropsCoverRoleSemantics = resolved
+    ? outputDropsCoverRoleSemantics(resolved, outputCovers)
+    : false
   const hasUnmappedEmbeddedCover = retainedCovers.some(
     (cover) => cover.source === 'embedded' && cover.sourceIndex === undefined,
   )
-  const hasAacCoverLoss = resolved === 'aac' && retainedCovers.length > 0
+  const hasChangedRawTags =
+    changedRawTags(item.draft.rawTags, item.originalDraft.rawTags).length > 0
   const browserExportWarning = item.browserExportWarning
-  const requiresTranscode = Boolean(resolved && (!source || source !== resolved))
   const lyricsTargetLimitations = resolved
     ? lyricsFormatLimitations(resolved, item.draft.lyricsSlots)
     : []
@@ -169,25 +187,27 @@ export const buildExportPlan = (
     )
   }
 
-  if (item.draft.covers.length > 1 && resolved === 'm4a') {
+  if (dropsCoverRoleSemantics && outputVerification?.covers.roleDowngradeDescription) {
     risks.push(
       risk(
         'cover-roles',
         'cover-type',
-        '多封面的类型语义需要运行时验证',
-        'M4A 对多个封面的角色表达能力因播放器与写入器而异。执行前会逐项列出实际保留结果。',
+        '封面角色与顺序将降级',
+        outputVerification.covers.roleDowngradeDescription,
         true,
       ),
     )
   }
 
-  if (hasAacCoverLoss) {
+  if (outputOmittedCovers.length > 0 && outputVerification?.covers.omissionDescription) {
     risks.push(
       risk(
-        'aac-cover-omitted',
+        'cover-omitted',
         'cover-capacity',
-        'AAC 副本不会包含内嵌封面',
-        `首发 AAC 输出使用 ADTS \`.aac\`，不能承载 ${retainedCovers.length} 张待保留或新增的内嵌封面。确认后会生成不含这些封面的 AAC 新副本；源文件不变。`,
+        '部分封面将从新副本省略',
+        `${outputVerification.covers.omissionDescription} 当前计划会省略 ${outputOmittedCovers
+          .map((cover) => `${cover.kind}（${cover.mime}）`)
+          .join('、')}。确认后仍会生成新副本；源文件不变。`,
         true,
       ),
     )
@@ -294,6 +314,23 @@ export const buildExportPlan = (
     )
   }
 
+  if (
+    resolved &&
+    hasChangedRawTags &&
+    !shouldVerifyRawTagsExactly(resolved, requiresTranscode) &&
+    outputVerification?.rawTags.crossContainerDescription
+  ) {
+    risks.push(
+      risk(
+        'raw-tag-cross-container-best-effort',
+        'metadata-write',
+        '高级标签无法按原生键逐项回读',
+        outputVerification.rawTags.crossContainerDescription,
+        true,
+      ),
+    )
+  }
+
   if (browserExportWarning) {
     risks.push(
       risk(
@@ -312,7 +349,7 @@ export const buildExportPlan = (
         'unknown-tag-mapping',
         'metadata-write',
         '跨容器转换可能无法保留容器特定标签',
-        '标题、艺术家等标准字段会进入目标映射；未知或容器特定原始标签需要在实际运行时回读验证。',
+        '标题、艺术家等标准字段会进入目标映射；未编辑的未知或容器特定原始标签可能被目标转换器省略或重写，MINFO 不承诺其逐键保留。',
         true,
       ),
     )

@@ -134,6 +134,38 @@ describe('renderFfmpegCommand', () => {
     expect(script).toContain('ffmpeg -n')
   })
 
+  it('does not use a full-video-stream fallback for a stable M4A target', () => {
+    const original = {
+      ...emptyDraft(),
+      covers: [
+        {
+          id: 'embedded',
+          kind: 'front' as const,
+          mime: 'image/webp',
+          size: 1,
+          source: 'embedded' as const,
+        },
+      ],
+    }
+    const script = renderFfmpegCommand({
+      dialect: 'posix',
+      plan,
+      draft: original,
+      originalDraft: original,
+      sourceName: 'source.mp3',
+      customFormat: '',
+      allowOverwrite: false,
+      paths: {
+        sourcePath: '/music/source.mp3',
+        outputPath: '/music/output.m4a',
+        coverPaths: {},
+      },
+    })
+
+    expect(script).not.toContain("'0:v?'")
+    expect(script).not.toContain("'-c:v' 'copy'")
+  })
+
   it('does not require a replacement-cover path for an AAC plan that omits covers', () => {
     const aacPlan: ExportPlan = {
       ...plan,

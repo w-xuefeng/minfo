@@ -62,7 +62,7 @@ describe('ExportPanel', () => {
       summary: 'AAC: 检测到 1 项副本影响；勾选“我已知晓，坚持导出”后可继续。',
       risks: [
         {
-          id: 'aac-cover-omitted',
+          id: 'cover-omitted',
           kind: 'cover-capacity',
           title: 'AAC 副本不会包含内嵌封面',
           description: '确认后会生成不含封面的 AAC 新副本；源文件不变。',
@@ -104,7 +104,7 @@ describe('ExportPanel', () => {
       requiresTranscode: true,
       risks: [
         {
-          id: 'aac-cover-omitted',
+          id: 'cover-omitted',
           kind: 'cover-capacity',
           title: 'AAC 副本不会包含内嵌封面',
           description: '确认后生成不含封面的新副本。',
@@ -141,6 +141,41 @@ describe('ExportPanel', () => {
 
     expect(wrapper.text()).toContain('当前目标会省略的封面不会要求路径')
     expect(wrapper.text()).not.toContain('替换封面 1 的本地路径')
+  })
+
+  it('recommends MP3 for every configured cover-omission risk, not only AAC', async () => {
+    const m4aPlan: ExportPlan = {
+      ...plan,
+      format: 'm4a',
+      requestedExtension: 'm4a',
+      resolvedFormat: 'm4a',
+      outputFileName: 'output.m4a',
+      requiresTranscode: true,
+      risks: [
+        {
+          id: 'cover-omitted',
+          kind: 'cover-capacity',
+          title: '部分封面将从新副本省略',
+          description: 'M4A 将省略 GIF 封面。',
+          requiresConfirmation: true,
+        },
+      ],
+    }
+    const wrapper = mount(ExportPanel, {
+      props: {
+        item,
+        request: { ...request, format: 'm4a' },
+        plan: m4aPlan,
+        runtime,
+        errors: [],
+        progress: null,
+        exportError: '',
+      },
+    })
+
+    expect(wrapper.text()).toContain('推荐兼容格式：MP3')
+    await wrapper.get('.format-fallback button').trigger('click')
+    expect(wrapper.emitted('update-request')).toEqual([[{ ...request, format: 'mp3' }]])
   })
 
   it('keeps an asynchronous export error next to the action and focuses it', async () => {

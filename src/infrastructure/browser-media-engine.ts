@@ -18,6 +18,12 @@ import {
 import { getBrowserAudioFormat } from '@/domain/audio-formats'
 import { getExtension } from '@/domain/format'
 import {
+  normalizeOutputCoverMime,
+  outputVerificationCapabilityFor,
+  shouldVerifyOutputAudioCodec,
+  shouldVerifyRawTagsExactly,
+} from '@/domain/output-verification-capabilities'
+import {
   lyricsVerificationMetadataKeysForFormat,
   normalizeLyricsSlots,
   ordinaryLyricsMetadataTagsForFormat,
@@ -144,9 +150,15 @@ const appendDiagnosticLogLines = (lines: string[], stream: string, message: stri
 const equalLists = (left: readonly string[], right: readonly string[]): boolean =>
   left.length === right.length && left.every((item, index) => item === right[index])
 
-const equalMetadataLists = (actual: readonly string[], expected: readonly string[]): boolean =>
+const equalMetadataLists = (
+  actual: readonly string[],
+  expected: readonly string[],
+  multiValueSeparator: string,
+): boolean =>
   equalLists(actual, expected) ||
-  (actual.length === 1 && expected.length > 1 && actual[0] === expected.join(' / '))
+  (actual.length === 1 &&
+    expected.length > 1 &&
+    actual[0] === expected.join(multiValueSeparator))
 
 const sameNumber = (actual: number | null | undefined, expected: string): boolean =>
   expected ? actual === Number(expected) : actual === null || actual === undefined
@@ -162,9 +174,6 @@ const nativeTagText = (value: unknown): string => {
   }
 }
 
-const normalizedMime = (mime: string): string =>
-  mime === 'image/jpg' ? 'image/jpeg' : mime.toLowerCase()
-
 const coverKind = (type: string | undefined): CoverArtwork['kind'] => {
   const normalized = type?.toLowerCase() ?? ''
   if (normalized.includes('back')) return 'back'
@@ -174,26 +183,40 @@ const coverKind = (type: string | undefined): CoverArtwork['kind'] => {
   return 'other'
 }
 
-const assertCovers = (
+/**
+ * Verifies artwork only to the strength declared by the target's output
+ * capability. In particular, M4A `covr` has no ID3-style artwork role, so a
+ * valid single PNG/JPEG must not be rejected merely because its parsed type
+ * is absent.
+ */
+export const assertCoverReadback = (
+  format: StableOutputFormat,
   actual: readonly {
     readonly format?: string
     readonly data: Uint8Array
     readonly type?: string
   }[],
   expected: readonly CoverArtwork[],
-  allowRoleDowngrade = false,
 ): void => {
+  const comparison = outputVerificationCapabilityFor(format).covers.comparison
+  if (comparison === 'must-be-empty') {
+    if (actual.length > 0) {
+      throw new Error('导出后的目标容器意外保留了内嵌封面，已取消下载。')
+    }
+    return
+  }
+
   if (actual.length !== expected.length) {
     throw new Error('导出后的封面数量未通过回读验证，已取消下载。')
   }
 
-  if (allowRoleDowngrade) {
+  if (comparison === 'unordered-mime-size') {
     const unmatched = [...actual]
     const missing = expected.find((cover) => {
       const index = unmatched.findIndex(
         (output) =>
-          normalizedMime(output.format ?? '') === normalizedMime(cover.mime) &&
-          output.data.byteLength === cover.size,
+          normalizeOutputCoverMime(output.format ?? '') ===
+            normalizeOutputCoverMime(cover.mime) && output.data.byteLength === cover.size,
       )
       if (index < 0) return true
       unmatched.splice(index, 1)
@@ -209,7 +232,7 @@ const assertCovers = (
     const output = actual[index]
     if (!output) return true
     return (
-      normalizedMime(output.format ?? '') !== normalizedMime(cover.mime) ||
+      normalizeOutputCoverMime(output.format ?? '') !== normalizeOutputCoverMime(cover.mime) ||
       output.data.byteLength !== cover.size ||
       coverKind(output.type) !== cover.kind
     )
@@ -308,31 +331,34 @@ const verifiableStandardChanges = (
 }
 
 /**
- * music-metadata intentionally exposes only part of ADTS ID3v2 text through
- * its common model. FFprobe's structured format tags are the authoritative
- * round-trip evidence for MINFO's ADTS AAC output path.
+ * Some target containers expose standard fields more reliably through
+ * FFprobe's format tags than through music-metadata's common model. The
+ * selected output verification capability chooses this reader.
  */
-const assertAacMetadata = (
+const assertFfprobeStandardMetadata = (
   document: FfprobeDocument,
   draft: MetadataDraft,
   original: MetadataDraft,
+  multiValueSeparator: string,
 ): void => {
   const changed = verifiableStandardChanges(draft, original)
   const checks: readonly [boolean, string][] = [
     [!changed.has('title') || formatTagValue(document, 'title') === draft.title, '标题'],
     [
       !changed.has('artists') ||
-        formatTagValue(document, 'artist') === draft.artists.join(' / '),
+        formatTagValue(document, 'artist') === draft.artists.join(multiValueSeparator),
       '艺术家',
     ],
     [!changed.has('album') || formatTagValue(document, 'album') === draft.album, '专辑'],
     [
       !changed.has('albumArtists') ||
-        formatTagValue(document, 'album_artist') === draft.albumArtists.join(' / '),
+        formatTagValue(document, 'album_artist') ===
+          draft.albumArtists.join(multiValueSeparator),
       '专辑艺术家',
     ],
     [
-      !changed.has('genres') || formatTagValue(document, 'genre') === draft.genres.join(' / '),
+      !changed.has('genres') ||
+        formatTagValue(document, 'genre') === draft.genres.join(multiValueSeparator),
       '流派',
     ],
     [
@@ -352,13 +378,13 @@ const assertAacMetadata = (
     ],
     [
       !changed.has('composers') ||
-        formatTagValue(document, 'composer') === draft.composers.join(' / '),
+        formatTagValue(document, 'composer') === draft.composers.join(multiValueSeparator),
       '作曲者',
     ],
   ]
   const failed = checks.find(([valid]) => !valid)
   if (failed) {
-    throw new Error(`导出后的 AAC ${failed[1]}未通过 FFprobe 回读验证，已取消下载。`)
+    throw new Error(`导出后的${failed[1]}未通过 FFprobe 回读验证，已取消下载。`)
   }
 }
 
@@ -443,6 +469,7 @@ const verifyMetadata = async (
   format: StableOutputFormat,
   managedLyricsSourceTagKeys: readonly string[],
 ): Promise<void> => {
+  const verification = outputVerificationCapabilityFor(format)
   const changed = verifiableStandardChanges(draft, original)
   const expectedCovers = exportableCovers(plan, draft, original)
   const metadata = await parseBlob(blob, { duration: false })
@@ -454,6 +481,7 @@ const verifyMetadata = async (
         equalMetadataLists(
           common.artists ?? (common.artist ? [common.artist] : []),
           draft.artists,
+          verification.standardMetadata.multiValueSeparator,
         ),
       '艺术家',
     ],
@@ -463,10 +491,19 @@ const verifyMetadata = async (
         equalMetadataLists(
           common.albumartists ?? (common.albumartist ? [common.albumartist] : []),
           draft.albumArtists,
+          verification.standardMetadata.multiValueSeparator,
         ),
       '专辑艺术家',
     ],
-    [!changed.has('genres') || equalMetadataLists(common.genre ?? [], draft.genres), '流派'],
+    [
+      !changed.has('genres') ||
+        equalMetadataLists(
+          common.genre ?? [],
+          draft.genres,
+          verification.standardMetadata.multiValueSeparator,
+        ),
+      '流派',
+    ],
     [
       !changed.has('releaseDate') ||
         (common.date ?? common.releasedate ?? common.year?.toString() ?? '') ===
@@ -487,13 +524,27 @@ const verifyMetadata = async (
       '碟片编号',
     ],
     [
-      !changed.has('composers') || equalMetadataLists(common.composer ?? [], draft.composers),
+      !changed.has('composers') ||
+        equalMetadataLists(
+          common.composer ?? [],
+          draft.composers,
+          verification.standardMetadata.multiValueSeparator,
+        ),
       '作曲者',
     ],
   ]
-  const failed = (format === 'aac' ? [] : checks).find(([valid]) => !valid)
-  if (failed) {
-    throw new Error(`导出后的${failed[1]}未通过回读验证，已取消下载。`)
+  if (verification.standardMetadata.reader === 'music-metadata-common') {
+    const failed = checks.find(([valid]) => !valid)
+    if (failed) {
+      throw new Error(`导出后的${failed[1]}未通过回读验证，已取消下载。`)
+    }
+  } else {
+    assertFfprobeStandardMetadata(
+      probeDocument,
+      draft,
+      original,
+      verification.standardMetadata.multiValueSeparator,
+    )
   }
 
   assertOrdinaryLyricsReadback(
@@ -512,8 +563,10 @@ const verifyMetadata = async (
     draft,
     format,
   )
-  assertCovers(common.picture ?? [], expectedCovers, hasPlanRisk(plan, 'cover-roles'))
-  assertRawTags(metadata.native, draft, original, unverifiedRawTagKeys(plan, draft, original))
+  assertCoverReadback(format, common.picture ?? [], expectedCovers)
+  if (shouldVerifyRawTagsExactly(format, plan.requiresTranscode)) {
+    assertRawTags(metadata.native, draft, original, unverifiedRawTagKeys(plan, draft, original))
+  }
 }
 
 const probeArguments = (sourcePath: string, resultPath: string): string[] => [
@@ -539,7 +592,12 @@ const attachedPictureOrdinals = (document: FfprobeDocument): readonly number[] =
   return result
 }
 
-const assertOutputProbe = (plan: ExportPlan, document: FfprobeDocument): void => {
+/** Container and audio-stream integrity are always delivery hard conditions. */
+export const assertOutputProbe = (plan: ExportPlan, document: FfprobeDocument): void => {
+  if (!plan.resolvedFormat) {
+    throw new Error('当前导出格式不受浏览器运行时支持。')
+  }
+  const verification = outputVerificationCapabilityFor(plan.resolvedFormat)
   const containerNames = (document.format?.format_name ?? '')
     .split(',')
     .map((item) => item.trim().toLowerCase())
@@ -547,19 +605,15 @@ const assertOutputProbe = (plan: ExportPlan, document: FfprobeDocument): void =>
   const codec = primaryAudioCodec(document)
   if (!codec) throw new Error('导出文件未通过 FFprobe 音频流验证。')
 
-  const matchesContainer =
-    plan.resolvedFormat === 'mp3'
-      ? containerNames.includes('mp3')
-      : plan.resolvedFormat === 'm4a'
-        ? containerNames.some((name) => ['m4a', 'mp4', 'mov'].includes(name))
-        : containerNames.some((name) => name === 'aac' || name === 'adts')
+  const matchesContainer = containerNames.some((name) =>
+    verification.probe.acceptedContainerNames.includes(name),
+  )
   if (!matchesContainer) {
     throw new Error('导出文件的容器与预检目标不一致，已取消下载。')
   }
 
-  if (plan.requiresTranscode || plan.resolvedFormat === 'aac') {
-    const expectedCodec = plan.resolvedFormat === 'mp3' ? 'mp3' : 'aac'
-    if (codec !== expectedCodec) {
+  if (shouldVerifyOutputAudioCodec(plan.resolvedFormat, plan.requiresTranscode)) {
+    if (codec !== verification.probe.expectedAudioCodec) {
       throw new Error('导出文件的音频编码与预检目标不一致，已取消下载。')
     }
   }
@@ -779,9 +833,6 @@ export class BrowserMediaEngine {
         }
         assertOutputProbe(request.plan, probe.document)
         const validateMetadata = requiresFullMetadataReadback(request.plan)
-        if (validateMetadata && request.plan.resolvedFormat === 'aac') {
-          assertAacMetadata(probe.document, request.draft, request.originalDraft)
-        }
 
         const data = toBytes(await ffmpeg.readFile(outputPath))
         const blob = new Blob([toArrayBuffer(data)], {

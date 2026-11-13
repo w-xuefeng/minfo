@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { emptyDraft } from '@/domain/model'
+import { outputVerificationCapabilityFor } from '@/domain/output-verification-capabilities'
 
 import {
   buildFfmpegArguments,
@@ -168,6 +169,27 @@ describe('survivingCovers', () => {
     expect(argumentsList).not.toContain('lyrics-eng=English lyrics')
   })
 
+  it('uses the selected output capability for multi-value metadata serialization', () => {
+    const m4aPlan: ExportPlan = {
+      ...plan,
+      format: 'm4a',
+      requestedExtension: 'm4a',
+      resolvedFormat: 'm4a',
+      outputFileName: 'source (MINFO).m4a',
+      requiresTranscode: true,
+    }
+    const draft = { ...emptyDraft(), artists: ['Artist A', 'Artist B'] }
+    const argumentsList = buildFfmpegArguments(m4aPlan, draft, emptyDraft(), {
+      source: 'input.mp3',
+      covers: [],
+      output: 'output.m4a',
+    })
+
+    expect(argumentsList).toContain(
+      `artist=Artist A${outputVerificationCapabilityFor('m4a').standardMetadata.multiValueSeparator}Artist B`,
+    )
+  })
+
   it('omits covers from an AAC copy instead of rejecting the plan', () => {
     const aacPlan: ExportPlan = {
       ...plan,
@@ -199,6 +221,86 @@ describe('survivingCovers', () => {
     expect(exportableCovers(aacPlan, draft, emptyDraft())).toEqual([])
     expect(argumentsList).not.toContain('cover.jpg')
     expect(argumentsList).not.toContain('0:v:0?')
+  })
+
+  it('uses the M4A output verification policy to omit GIF/WebP before FFmpeg mapping', () => {
+    const m4aPlan: ExportPlan = {
+      ...plan,
+      format: 'm4a',
+      requestedExtension: 'm4a',
+      resolvedFormat: 'm4a',
+      outputFileName: 'source (MINFO).m4a',
+      requiresTranscode: true,
+    }
+    const draft = {
+      ...emptyDraft(),
+      covers: [
+        {
+          id: 'png',
+          kind: 'front' as const,
+          mime: 'image/png',
+          size: 1,
+          source: 'replacement' as const,
+        },
+        {
+          id: 'webp',
+          kind: 'back' as const,
+          mime: 'image/webp',
+          size: 1,
+          source: 'replacement' as const,
+        },
+      ],
+    }
+
+    const argumentsList = buildFfmpegArguments(m4aPlan, draft, emptyDraft(), {
+      source: 'input.mp3',
+      covers: ['cover.png'],
+      output: 'output.m4a',
+    })
+
+    expect(exportableCovers(m4aPlan, draft, emptyDraft()).map((cover) => cover.id)).toEqual([
+      'png',
+    ])
+    expect(argumentsList).toContain('cover.png')
+    expect(argumentsList).not.toContain('cover.webp')
+  })
+
+  it('does not let a local all-video-stream fallback bypass the stable target cover policy', () => {
+    const m4aPlan: ExportPlan = {
+      ...plan,
+      format: 'm4a',
+      requestedExtension: 'm4a',
+      resolvedFormat: 'm4a',
+      outputFileName: 'source (MINFO).m4a',
+      requiresTranscode: true,
+    }
+    const draft = {
+      ...emptyDraft(),
+      covers: [
+        {
+          id: 'unmapped',
+          kind: 'front' as const,
+          mime: 'image/webp',
+          size: 1,
+          source: 'embedded' as const,
+        },
+      ],
+    }
+
+    const argumentsList = buildFfmpegArguments(
+      m4aPlan,
+      draft,
+      draft,
+      {
+        source: 'input.mp3',
+        covers: [],
+        output: 'output.m4a',
+      },
+      { preserveAllSourceVideoStreams: true },
+    )
+
+    expect(argumentsList).not.toContain('0:v?')
+    expect(argumentsList).not.toContain('-c:v')
   })
 
   it('omits an unmapped embedded cover but keeps a mapped one in the new copy', () => {

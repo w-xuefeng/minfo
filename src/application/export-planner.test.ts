@@ -166,9 +166,114 @@ describe('buildExportPlan', () => {
     )
 
     expect(plan.runnable).toBe(true)
-    expect(plan.risks.find((risk) => risk.id === 'aac-cover-omitted')).toMatchObject({
+    expect(plan.risks.find((risk) => risk.id === 'cover-omitted')).toMatchObject({
       requiresConfirmation: true,
     })
+  })
+
+  it('uses the target verification policy for M4A cover omission and role-loss risks', () => {
+    const gifDraft = {
+      ...emptyDraft(),
+      covers: [
+        {
+          id: 'gif',
+          kind: 'front' as const,
+          mime: 'image/gif',
+          size: 3,
+          source: 'replacement' as const,
+        },
+      ],
+    }
+    const gifPlan = buildExportPlan(
+      item({ draft: gifDraft, originalDraft: gifDraft }),
+      {
+        format: 'original',
+        quality: 'high',
+        outputBaseName: 'output',
+        allowOverwrite: false,
+      },
+      runtime,
+    )
+
+    expect(gifPlan.risks.find((risk) => risk.id === 'cover-omitted')).toMatchObject({
+      description: expect.stringContaining('GIF'),
+      requiresConfirmation: true,
+    })
+    expect(gifPlan.risks.find((risk) => risk.id === 'cover-roles')).toBeUndefined()
+
+    const multiCoverDraft = {
+      ...emptyDraft(),
+      covers: [
+        {
+          id: 'front',
+          kind: 'front' as const,
+          mime: 'image/png',
+          size: 3,
+          source: 'replacement' as const,
+        },
+        {
+          id: 'back',
+          kind: 'back' as const,
+          mime: 'image/jpeg',
+          size: 4,
+          source: 'replacement' as const,
+        },
+      ],
+    }
+    const multiCoverPlan = buildExportPlan(
+      item({ draft: multiCoverDraft, originalDraft: multiCoverDraft }),
+      {
+        format: 'original',
+        quality: 'high',
+        outputBaseName: 'output',
+        allowOverwrite: false,
+      },
+      runtime,
+    )
+
+    expect(multiCoverPlan.risks.find((risk) => risk.id === 'cover-roles')).toMatchObject({
+      requiresConfirmation: true,
+    })
+  })
+
+  it('does not make a changed raw key a cross-container download veto after acknowledgement', () => {
+    const originalDraft = {
+      ...emptyDraft(),
+      rawTags: [{ id: 'custom', key: 'TXXX:custom', value: 'before' }],
+    }
+    const draft = {
+      ...originalDraft,
+      rawTags: [{ id: 'custom', key: 'TXXX:custom', value: 'after' }],
+    }
+    const transcoded = buildExportPlan(
+      item({ draft, originalDraft }),
+      {
+        format: 'mp3',
+        quality: 'high',
+        outputBaseName: 'output',
+        allowOverwrite: false,
+      },
+      runtime,
+    )
+    const sameContainer = buildExportPlan(
+      item({ draft, originalDraft }),
+      {
+        format: 'original',
+        quality: 'high',
+        outputBaseName: 'output',
+        allowOverwrite: false,
+      },
+      runtime,
+    )
+
+    expect(
+      transcoded.risks.find((risk) => risk.id === 'raw-tag-cross-container-best-effort'),
+    ).toMatchObject({
+      requiresConfirmation: true,
+    })
+    expect(
+      sameContainer.risks.find((risk) => risk.id === 'raw-tag-cross-container-best-effort'),
+    ).toBeUndefined()
   })
 
   it('does not invent a target for unsupported source formats', () => {

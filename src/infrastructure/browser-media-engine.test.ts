@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  assertCoverReadback,
   assertLyricsManifestReadback,
   assertOrdinaryLyricsReadback,
+  assertOutputProbe,
   requiresFullMetadataReadback,
 } from './browser-media-engine'
 import { emptyDraft } from '@/domain/model'
@@ -251,5 +253,89 @@ describe('assertOrdinaryLyricsReadback', () => {
         'm4a',
       ),
     ).not.toThrow()
+  })
+})
+
+describe('output verification capability integration', () => {
+  const frontPng = {
+    id: 'front',
+    kind: 'front' as const,
+    mime: 'image/png',
+    size: 3,
+    source: 'replacement' as const,
+  }
+
+  it('accepts an M4A covr image without a fabricated ID3 role and ignores its order', () => {
+    expect(() =>
+      assertCoverReadback(
+        'm4a',
+        [
+          { format: 'image/jpeg', data: new Uint8Array(4) },
+          { format: 'image/png', data: new Uint8Array(3) },
+        ],
+        [
+          frontPng,
+          {
+            ...frontPng,
+            id: 'back',
+            kind: 'back',
+            mime: 'image/jpeg',
+            size: 4,
+          },
+        ],
+      ),
+    ).not.toThrow()
+    expect(() =>
+      assertCoverReadback(
+        'm4a',
+        [{ format: 'image/png', data: new Uint8Array(3) }],
+        [frontPng],
+      ),
+    ).not.toThrow()
+  })
+
+  it('keeps strict MP3 role/order checks and requires AAC output to have no artwork', () => {
+    expect(() =>
+      assertCoverReadback(
+        'mp3',
+        [{ format: 'image/png', data: new Uint8Array(3) }],
+        [frontPng],
+      ),
+    ).toThrow('顺序、类型或字节大小')
+    expect(() =>
+      assertCoverReadback('aac', [{ format: 'image/png', data: new Uint8Array(3) }], []),
+    ).toThrow('意外保留了内嵌封面')
+  })
+
+  it('uses configured container and codec checks instead of output-format branches', () => {
+    const m4aPlan: ExportPlan = {
+      ...plan(),
+      format: 'm4a',
+      requestedExtension: 'm4a',
+      resolvedFormat: 'm4a',
+      outputFileName: 'output.m4a',
+      requiresTranscode: true,
+    }
+    expect(() =>
+      assertOutputProbe(m4aPlan, {
+        format: { format_name: 'mov,mp4,m4a,3gp,3g2,mj2' },
+        streams: [{ codec_type: 'audio', codec_name: 'aac' }],
+      }),
+    ).not.toThrow()
+
+    const aacPlan: ExportPlan = {
+      ...m4aPlan,
+      format: 'aac',
+      requestedExtension: 'aac',
+      resolvedFormat: 'aac',
+      outputFileName: 'output.aac',
+      requiresTranscode: false,
+    }
+    expect(() =>
+      assertOutputProbe(aacPlan, {
+        format: { format_name: 'aac' },
+        streams: [{ codec_type: 'audio', codec_name: 'mp3' }],
+      }),
+    ).toThrow('音频编码')
   })
 })

@@ -1,4 +1,5 @@
 import { getExtension, isSafeExtension, isStableFormat, normalizeFormat } from '@/domain/format'
+import { outputVerificationCapabilityFor } from '@/domain/output-verification-capabilities'
 import type {
   CoverArtwork,
   ExportPlan,
@@ -186,8 +187,13 @@ const commandArguments = (request: LocalCommandRequest): RenderedArguments => {
   const hasUnmappedEmbeddedCover = survivingCovers(request.draft, request.originalDraft).some(
     (cover) => cover.source === 'embedded' && cover.sourceIndex === undefined,
   )
+  const canCopyUnmappedSourceVisualStreams =
+    !isStableFormat(extension) ||
+    outputVerificationCapabilityFor(extension).covers.allowUnmappedSourceVisualStreamCopy
   const preserveAllSourceVideoStreams =
-    hasUnmappedEmbeddedCover && originalCoverLayoutIsRetained(request)
+    canCopyUnmappedSourceVisualStreams &&
+    hasUnmappedEmbeddedCover &&
+    originalCoverLayoutIsRetained(request)
   const covers = commandCovers(request, extension)
   const replacementCovers = covers.filter((cover) => cover.source === 'replacement')
   const coverPaths = replacementCovers.map((_cover, index) => `__MINFO_COVER_${index + 1}__`)
